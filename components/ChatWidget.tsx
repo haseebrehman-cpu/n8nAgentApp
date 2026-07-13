@@ -8,6 +8,8 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** When true, render the quick-option menu under this assistant message. */
+  showMenu?: boolean;
 }
 
 interface ChatOption {
@@ -20,6 +22,8 @@ const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Our Store";
 const STORAGE_KEY = "chat-widget-history-v1";
 
 const WELCOME_MESSAGE = `Welcome to **${STORE_NAME}**. I'm your shopping assistant.\n\nHow can I help you today? Choose an option below, or type your question.`;
+
+const MENU_MESSAGE = `Here's the **main menu**. Choose an option below, or type your question.`;
 
 const OPTIONS: ChatOption[] = [
   { id: "track-order", label: "Track Your Order", enabled: false },
@@ -41,6 +45,10 @@ function nextId() {
   return `msg-${Date.now()}-${idCounter}`;
 }
 
+function isMenuCommand(text: string): boolean {
+  return /^(m|menu|main\s*menu)$/i.test(text.trim());
+}
+
 function loadStoredMessages(): ChatMessage[] {
   if (typeof window === "undefined") return [];
   try {
@@ -59,6 +67,39 @@ function loadStoredMessages(): ChatMessage[] {
   } catch {
     return [];
   }
+}
+
+function OptionButtons({
+  disabled,
+  onSelect,
+}: {
+  disabled: boolean;
+  onSelect: (option: ChatOption) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-col items-start gap-2">
+      {OPTIONS.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onSelect(option)}
+          disabled={disabled}
+          className={
+            option.enabled
+              ? "rounded-full border border-indigo-600 bg-white px-3.5 py-1.5 text-sm font-medium text-indigo-600 transition hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+              : "rounded-full border border-slate-300 bg-white px-3.5 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
+          }
+        >
+          {option.label}
+          {!option.enabled && (
+            <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-400">
+              soon
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export default function ChatWidget() {
@@ -91,13 +132,32 @@ export default function ChatWidget() {
 
   function toggleOpen() {
     if (!isOpen && messages.length === 0) {
-      setMessages([{ id: nextId(), role: "assistant", content: WELCOME_MESSAGE }]);
+      setMessages([
+        { id: nextId(), role: "assistant", content: WELCOME_MESSAGE, showMenu: true },
+      ]);
     }
     setIsOpen(!isOpen);
   }
 
-  function pushAssistant(content: string) {
-    setMessages((prev) => [...prev, { id: nextId(), role: "assistant", content }]);
+  function pushAssistant(content: string, showMenu = false) {
+    setMessages((prev) => [
+      ...prev,
+      { id: nextId(), role: "assistant", content, showMenu },
+    ]);
+  }
+
+  function openMainMenu() {
+    setMessages((prev) => [
+      ...prev,
+      { id: nextId(), role: "user", content: "M" },
+      {
+        id: nextId(),
+        role: "assistant",
+        content: MENU_MESSAGE,
+        showMenu: true,
+      },
+    ]);
+    inputRef.current?.focus();
   }
 
   function handleOptionClick(option: ChatOption) {
@@ -117,6 +177,13 @@ export default function ChatWidget() {
   async function sendMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed || isTyping) return;
+
+    // Bring the option menu back without calling the AI.
+    if (isMenuCommand(trimmed)) {
+      setInput("");
+      openMainMenu();
+      return;
+    }
 
     const userMessage: ChatMessage = { id: nextId(), role: "user", content: trimmed };
     const nextMessages = [...messages, userMessage];
@@ -149,6 +216,10 @@ export default function ChatWidget() {
       setIsTyping(false);
     }
   }
+
+  /** Show the M hint once the user is past the opening menu. */
+  const showMenuHint =
+    messages.filter((m) => m.role === "user").length >= 1;
 
   return (
     <>
@@ -199,7 +270,12 @@ export default function ChatWidget() {
 
           {/* Messages */}
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4">
-            {messages.map((message, index) => (
+            {messages.map((message, index) => {
+              const isLatestAssistant =
+                message.role === "assistant" &&
+                index === messages.findLastIndex((m) => m.role === "assistant");
+
+              return (
               <div key={message.id} className="w-full">
                 <div
                   className={
@@ -215,33 +291,19 @@ export default function ChatWidget() {
                   )}
                 </div>
 
-                {/* Option buttons under the welcome message */}
-                {index === 0 && message.role === "assistant" && (
-                  <div className="mt-3 flex flex-col items-start gap-2">
-                    {OPTIONS.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => handleOptionClick(option)}
-                        disabled={isTyping}
-                        className={
-                          option.enabled
-                            ? "rounded-full border border-indigo-600 bg-white px-3.5 py-1.5 text-sm font-medium text-indigo-600 transition hover:bg-indigo-600 hover:text-white disabled:opacity-50"
-                            : "rounded-full border border-slate-300 bg-white px-3.5 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
-                        }
-                      >
-                        {option.label}
-                        {!option.enabled && (
-                          <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-400">
-                            soon
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
+                {message.role === "assistant" && message.showMenu && (
+                  <OptionButtons disabled={isTyping} onSelect={handleOptionClick} />
+                )}
+
+                {isLatestAssistant && !message.showMenu && showMenuHint && (
+                  <p className="mt-1.5 px-1 text-left text-[11px] text-slate-400">
+                    Reply with <span className="font-semibold text-slate-500">M</span> for
+                    the main menu
+                  </p>
                 )}
               </div>
-            ))}
+              );
+            })}
 
             {isTyping && (
               <div className="mr-auto flex w-fit items-center gap-1 rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
@@ -264,7 +326,7 @@ export default function ChatWidget() {
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about our products..."
+              placeholder="Ask about our products… or M for menu"
               disabled={isTyping}
               maxLength={1000}
               className="flex-1 rounded-full border border-slate-300 bg-slate-50 px-4 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60"

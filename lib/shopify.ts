@@ -191,18 +191,60 @@ function toProductSummary(node: RawProductNode): ProductSummary {
   };
 }
 
-/** Search store products by keyword (matches title, type, vendor, and tags). */
-export async function searchProducts(
-  keyword: string,
-  limit = 10
-): Promise<ProductSummary[]> {
-  const { marketCountry } = getShopifyConfig();
-  const sanitized = keyword.replace(/["\\]/g, " ").trim();
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "with",
+  "and",
+  "or",
+  "for",
+  "of",
+  "in",
+  "to",
+  "set",
+  "ft",
+  "what",
+  "is",
+  "price",
+  "this",
+  "that",
+  "please",
+  "me",
+]);
 
-  const variables: Record<string, unknown> = {
-    query: sanitized,
-    first: Math.min(Math.max(limit, 1), MAX_RESULTS),
-  };
+/** Build a few search variants so long product titles still hit the catalog. */
+function buildSearchQueries(keyword: string): string[] {
+  const sanitized = keyword.replace(/["\\]/g, " ").trim();
+  if (!sanitized) return [];
+
+  const tokens = sanitized
+    .split(/\s+/)
+    .map((t) => t.replace(/[^a-zA-Z0-9-]/g, ""))
+    .filter((t) => t.length > 1 && !STOP_WORDS.has(t.toLowerCase()));
+
+  const queries: string[] = [sanitized];
+
+  if (tokens.length >= 2) {
+    // Distinctive middle terms often match better than the full marketing title
+    queries.push(tokens.slice(0, 4).join(" "));
+    if (tokens.length > 4) {
+      queries.push(tokens.slice(-3).join(" "));
+    }
+  } else if (tokens.length === 1) {
+    queries.push(tokens[0]);
+  }
+
+  // Deduplicate while preserving order
+  return [...new Set(queries.filter(Boolean))];
+}
+
+async function runProductQuery(
+  query: string,
+  first: number,
+  marketCountry: string | null
+): Promise<ProductSummary[]> {
+  const variables: Record<string, unknown> = { query, first };
   if (marketCountry) variables.country = marketCountry;
 
   const data = await shopifyGraphql<SearchProductsData>(
@@ -210,4 +252,21 @@ export async function searchProducts(
     variables
   );
   return data.products.edges.map((e) => toProductSummary(e.node));
+}
+
+/** Search store products by keyword (matches title, type, vendor, and tags). */
+export async function searchProducts(
+  keyword: string,
+  limit = 10
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
+  const first = Math.min(Math.max(limit, 1), MAX_RESULTS);
+  const queries = buildSearchQueries(keyword);
+
+  for (const query of queries) {
+    const products = await runProductQuery(query, first, marketCountry);
+    if (products.length > 0) return products;
+  }
+
+  return [];
 }

@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
+  ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
 import { getOpenAIConfig, isConfigError } from "@/lib/config";
 import { searchProducts } from "@/lib/shopify";
@@ -20,20 +21,22 @@ const OPENAI_TIMEOUT_MS = 45_000;
 const FALLBACK_REPLY =
   "I'm sorry, I couldn't complete that request. Could you rephrase it or try again?";
 
+const NOT_AVAILABLE_REPLY = "Product not available.";
+
 const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
       name: "search_products",
       description:
-        "Search the store's product catalog by keyword. Matches product title, type, vendor, and tags. Use SHORT keywords (1-2 words). Retry with different keywords if no results.",
+        "Search the store catalog. Use for any product name, model, price, size, colour, or stock question. Prefer 2–4 distinctive words from the product title.",
       parameters: {
         type: "object",
         properties: {
           keyword: {
             type: "string",
             description:
-              'Short search keyword, 1-2 words. E.g. "boxing gloves", "shin guard", "WAKO".',
+              'Search keywords, ideally 2–4 words. E.g. "robo kids punch", "boxing gloves", "shin guard".',
           },
         },
         required: ["keyword"],
@@ -41,6 +44,33 @@ const tools: ChatCompletionTool[] = [
     },
   },
 ];
+
+/** Detect messages that should look up the catalog (not greetings / unavailable services). */
+function shouldForceProductSearch(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+
+  if (
+    /^(hi|hello|hey|good\s+(morning|afternoon|evening)|thanks|thank you|ok|okay|bye)\b/.test(
+      t
+    ) &&
+    t.length < 40
+  ) {
+    return false;
+  }
+
+  if (
+    /\b(track\s+(my\s+)?order|place\s+(an\s+)?order|refund|return|damaged)\b/.test(t) &&
+    !/\b(product|price|size|stock|colour|color|available)\b/.test(t)
+  ) {
+    return false;
+  }
+
+  // Menu option labels / short prompts that are not a product lookup yet
+  if (t === "product information") return false;
+
+  return true;
+}
 
 async function runTool(name: string, args: Record<string, unknown>): Promise<string> {
   try {
@@ -52,7 +82,8 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<str
       if (products.length === 0) {
         return JSON.stringify({
           results: [],
-          hint: "No products matched. Retry with a different, shorter keyword before giving up.",
+          hint:
+            "No products matched. Retry once with different shorter keywords. If still empty, reply exactly: Product not available.",
         });
       }
       return JSON.stringify({ results: products });
@@ -87,17 +118,28 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
   const client = getClient();
   const { model } = getOpenAIConfig();
 
+  const lastUser = [...history].reverse().find((m) => m.role === "user")?.content ?? "";
+  const forceSearch = shouldForceProductSearch(lastUser);
+
   const conversation: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history,
   ];
 
+  let sawEmptyCatalog = false;
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const toolChoice: ChatCompletionToolChoiceOption =
+      round === 0 && forceSearch
+        ? { type: "function", function: { name: "search_products" } }
+        : "auto";
+
     const completion = await client.chat.completions.create({
       model,
       messages: conversation,
       tools,
-      temperature: 0.4,
+      tool_choice: toolChoice,
+      temperature: 0.3,
     });
 
     const message = completion.choices[0]?.message;
@@ -105,11 +147,21 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
 
     const toolCalls = message.tool_calls?.filter((tc) => tc.type === "function");
     if (!toolCalls || toolCalls.length === 0) {
-      return sanitizeReply(message.content ?? "") || FALLBACK_REPLY;
+      const reply = sanitizeReply(message.content ?? "") || FALLBACK_REPLY;
+      // If we already searched and still got a vague greeting, prefer the clear not-available line
+      if (
+        sawEmptyCatalog &&
+        /how can i assist|products and shopping/i.test(reply)
+      ) {
+        return NOT_AVAILABLE_REPLY;
+      }
+      return reply;
     }
 
     conversation.push(message);
     for (const toolCall of toolCalls) {
+      if (toolCall.type !== "function") continue;
+
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(toolCall.function.arguments || "{}");
@@ -117,6 +169,16 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
         // empty args; the tool reports the problem back to the model
       }
       const result = await runTool(toolCall.function.name, args);
+      try {
+        const parsed = JSON.parse(result) as { results?: unknown[] };
+        if (Array.isArray(parsed.results) && parsed.results.length === 0) {
+          sawEmptyCatalog = true;
+        } else if (Array.isArray(parsed.results) && parsed.results.length > 0) {
+          sawEmptyCatalog = false;
+        }
+      } catch {
+        // ignore parse errors
+      }
       conversation.push({
         role: "tool",
         tool_call_id: toolCall.id,
@@ -125,5 +187,5 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
     }
   }
 
-  return FALLBACK_REPLY;
+  return sawEmptyCatalog ? NOT_AVAILABLE_REPLY : FALLBACK_REPLY;
 }

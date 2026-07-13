@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Shopify AI Chatbot (Next.js + n8n)
 
-## Getting Started
+Production-ready AI customer support chatbot for a Shopify store.
 
-First, run the development server:
+- **Conversational AI lives inside Next.js** — the `/api/chat` route runs OpenAI with tool calling and queries the Shopify Admin API directly for live product data.
+- **n8n is reserved for automation workflows** — order tracking, refunds/returns, and complaint handling will be wired to n8n workflows later. Those menu options currently show "unavailable".
+
+## Features
+
+- Floating chat widget with a welcome message and quick-option buttons:
+  - Track Your Order *(coming soon)*
+  - **Product Information** *(live)*
+  - Place an Order *(coming soon)*
+  - Refunds & Returns *(coming soon)*
+  - Report a Damaged Product *(coming soon)*
+- Live product answers (prices, sizes, variants, stock) pulled from your Shopify catalog — the AI never invents product facts.
+- Strictly scoped: refuses off-topic questions and redirects to store topics.
+
+## Setup
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Add credentials
+
+Copy `.env.example` to `.env.local` and fill in:
+
+| Variable | Where to get it |
+|----------|----------------|
+| `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| `SHOPIFY_STORE_DOMAIN` | Your store's `*.myshopify.com` domain (no `https://`) |
+| `SHOPIFY_ADMIN_ACCESS_TOKEN` | Shopify admin → **Settings → Apps and sales channels → Develop apps** → Create an app → enable the `read_products` Admin API scope → Install app → reveal the `shpat_...` token |
+| `NEXT_PUBLIC_STORE_NAME` | Optional — your store's display name in the widget |
+
+### 3. Run
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) and click the chat bubble.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+app/
+  api/chat/route.ts   # Chat API: OpenAI tool-calling loop + Shopify product search
+  page.tsx            # Demo page hosting the widget
+components/
+  ChatWidget.tsx      # Floating chat widget (welcome message, option buttons, chat UI)
+lib/
+  shopify.ts          # Shopify Admin GraphQL client (product search)
+  system-prompt.ts    # Assistant rules: scope, tool usage, formatting
+```
 
-## Learn More
+## Roadmap (n8n automation)
 
-To learn more about Next.js, take a look at the following resources:
+The disabled menu options will each trigger an n8n workflow via webhook:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **Track Your Order** — order lookup + carrier tracking
+- **Place an Order** — draft order creation
+- **Refunds & Returns** — return request intake + approval flow
+- **Report a Damaged Product** — complaint ticket with photo upload
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Set `N8N_WEBHOOK_URL` in `.env.local` when those workflows are ready.

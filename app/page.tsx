@@ -4,7 +4,7 @@ const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Our Store";
 
 export default function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 px-6 text-center">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-linear-to-b from-slate-50 to-slate-100 px-6 text-center">
       <span className="mb-4 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
         AI Shopping Assistant
       </span>

@@ -114,6 +114,9 @@ export default function ChatWidget() {
   useEffect(() => {
     try {
       window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      setTimeout(() => {
+        sessionStorage.removeItem(STORAGE_KEY);
+      }, 10000);
     } catch {
       // storage full or unavailable — persistence is best-effort
     }
@@ -190,6 +193,7 @@ export default function ChatWidget() {
     setMessages(nextMessages);
     setInput("");
     setIsTyping(true);
+    console.log("[chat-widget] sending to /api/chat:", trimmed);
 
     try {
       const res = await fetch("/api/chat", {
@@ -199,6 +203,7 @@ export default function ChatWidget() {
           messages: nextMessages.map(({ role, content }) => ({ role, content })),
         }),
       });
+      console.log("[chat-widget] /api/chat response:", res.status);
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {

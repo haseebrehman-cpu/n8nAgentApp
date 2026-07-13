@@ -35,7 +35,10 @@ function clientKey(req: NextRequest): string {
 }
 
 export async function POST(req: NextRequest) {
-  const rate = checkRateLimit(clientKey(req));
+  // Visible proof this Next.js process handled the chat request.
+  console.log("[api/chat] POST received");
+
+  const rate = await checkRateLimit(clientKey(req));
   if (!rate.allowed) {
     return NextResponse.json(
       { error: "Too many messages. Please wait a moment and try again." },

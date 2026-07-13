@@ -38,6 +38,10 @@ Copy `.env.example` to `.env.local` and fill in:
 | `SHOPIFY_ADMIN_ACCESS_TOKEN` | Yes | Shopify admin → Settings → Apps and sales channels → **Develop apps** → create an app → enable the `read_products` Admin API scope → install → reveal the `shpat_...` token |
 | `SHOPIFY_MARKET_COUNTRY` | No | 2-letter country code of your storefront market (e.g. `DE`). Ensures quoted prices match the storefront exactly |
 | `NEXT_PUBLIC_STORE_NAME` | No | Your store's display name in the widget |
+| `REDIS_URL` | **Production: Yes** | Redis connection URL (`redis://` or `rediss://`). Local/dev works without it (in-memory fallback). |
+| `REDIS_KEY_PREFIX` | No | Key namespace (default `n8napp`) |
+| `PRODUCT_CACHE_TTL_SECONDS` | No | Product search cache TTL (default `60`) |
+| `PRODUCT_CACHE_EMPTY_TTL_SECONDS` | No | Empty-result cache TTL (default `20`) |
 
 ### 3. Run
 
@@ -59,9 +63,11 @@ components/
 lib/
   chat-agent.ts        # OpenAI tool-calling agent loop
   shopify.ts           # Shopify Admin GraphQL client (market-aware pricing, timeouts)
+  product-cache.ts     # Redis product search cache + cross-instance coalescing
+  redis.ts             # Shared ioredis singleton (redis:// / rediss://)
   system-prompt.ts     # Assistant rules: scope, tool usage, formatting
   config.ts            # Env validation (fails fast with clear messages)
-  rate-limit.ts        # In-memory sliding-window rate limiter (per IP)
+  rate-limit.ts        # Sliding-window rate limiter (Redis in prod, memory fallback)
   sanitize.ts          # Strips image markdown / CDN URLs from replies
   types.ts             # Shared request/response types
 ```
@@ -69,13 +75,15 @@ lib/
 ### Request flow
 
 1. Widget POSTs the conversation to `/api/chat`.
-2. The route validates the payload and applies a per-IP rate limit (20 req/min).
-3. `runChatAgent` runs the OpenAI loop; when the model calls `search_products`, the Shopify client fetches live catalog data with market-contextual pricing.
+2. The route validates the payload and applies a per-IP rate limit (20 req/min) via Redis when `REDIS_URL` is set.
+3. `runChatAgent` runs the OpenAI loop; when the model calls `search_products`, results are served from Redis cache on hit, otherwise Shopify is queried (with request coalescing under load).
 4. The reply is sanitized (no image markdown or CDN URLs) and rendered as markdown in the widget.
 
 ### Scaling notes
 
-- The rate limiter is in-memory (fine for one instance). For multi-instance deployments, swap `lib/rate-limit.ts` for a Redis/Upstash-backed implementation — the `checkRateLimit` signature stays the same.
+- **Redis is required for multi-instance / high-volume production.** Set `REDIS_URL` to a managed Redis (Redis Cloud, Upstash with Redis protocol, ElastiCache, etc.). Without it, rate limiting and product caching fall back to in-memory (single process only).
+- Product search cache uses a short TTL (default 60s) so prices/stock stay reasonably fresh while cutting Shopify Admin API load under chat spikes.
+- Concurrent identical catalog lookups are coalesced (in-process + Redis lock) to prevent stampedes.
 - Chat history lives in the browser (`sessionStorage`) and is replayed with each request, so the API is stateless and scales horizontally.
 
 ## Roadmap (n8n automation)

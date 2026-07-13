@@ -6,35 +6,14 @@
  */
 
 import { getShopifyConfig } from "@/lib/config";
+import { cachedProductSearch } from "@/lib/product-cache";
+import type { ProductSummary } from "@/lib/types";
+
+export type { ProductSummary };
 
 const API_VERSION = "2025-07";
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESULTS = 25;
-
-interface ProductVariant {
-  id: string;
-  title: string;
-  price: string;
-  availableForSale: boolean;
-  inventoryQuantity: number | null;
-}
-
-export interface ProductSummary {
-  id: string;
-  title: string;
-  status: string;
-  description: string;
-  productType: string;
-  vendor: string;
-  tags: string[];
-  priceRange: {
-    min: string;
-    max: string;
-    currency: string;
-  };
-  totalInventory: number | null;
-  variants: ProductVariant[];
-}
 
 async function shopifyGraphql<T>(
   query: string,
@@ -254,12 +233,11 @@ async function runProductQuery(
   return data.products.edges.map((e) => toProductSummary(e.node));
 }
 
-/** Search store products by keyword (matches title, type, vendor, and tags). */
-export async function searchProducts(
+async function searchProductsUncached(
   keyword: string,
-  limit = 10
+  limit: number,
+  marketCountry: string | null
 ): Promise<ProductSummary[]> {
-  const { marketCountry } = getShopifyConfig();
   const first = Math.min(Math.max(limit, 1), MAX_RESULTS);
   const queries = buildSearchQueries(keyword);
 
@@ -269,4 +247,18 @@ export async function searchProducts(
   }
 
   return [];
+}
+
+/**
+ * Search store products by keyword (title, type, vendor, tags).
+ * Results are Redis-cached with short TTL + request coalescing under load.
+ */
+export async function searchProducts(
+  keyword: string,
+  limit = 10
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
+  return cachedProductSearch(keyword, limit, marketCountry, () =>
+    searchProductsUncached(keyword, limit, marketCountry)
+  );
 }

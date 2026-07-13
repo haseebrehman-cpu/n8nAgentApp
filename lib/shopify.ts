@@ -1,12 +1,15 @@
 /**
  * Shopify Admin GraphQL API client.
  *
- * Required env vars (set in .env.local):
- *   SHOPIFY_STORE_DOMAIN        e.g. "your-store.myshopify.com"
- *   SHOPIFY_ADMIN_ACCESS_TOKEN  Admin API access token with read_products scope
+ * Prices are resolved per market when SHOPIFY_MARKET_COUNTRY is set,
+ * so the assistant quotes exactly what customers see on the storefront.
  */
 
+import { getShopifyConfig } from "@/lib/config";
+
 const API_VERSION = "2025-07";
+const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_RESULTS = 25;
 
 interface ProductVariant {
   id: string;
@@ -24,43 +27,30 @@ export interface ProductSummary {
   productType: string;
   vendor: string;
   tags: string[];
-  onlineStoreUrl: string | null;
   priceRange: {
     min: string;
     max: string;
     currency: string;
   };
   totalInventory: number | null;
-  imageUrl: string | null;
   variants: ProductVariant[];
-}
-
-class ShopifyConfigError extends Error {}
-
-function getConfig() {
-  const domain = process.env.SHOPIFY_STORE_DOMAIN;
-  const token = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
-  if (!domain || !token) {
-    throw new ShopifyConfigError(
-      "Shopify credentials are not configured. Set SHOPIFY_STORE_DOMAIN and SHOPIFY_ADMIN_ACCESS_TOKEN in .env.local."
-    );
-  }
-  return { domain, token };
 }
 
 async function shopifyGraphql<T>(
   query: string,
   variables: Record<string, unknown>
 ): Promise<T> {
-  const { domain, token } = getConfig();
+  const { domain, accessToken } = getShopifyConfig();
+
   const res = await fetch(`https://${domain}/admin/api/${API_VERSION}/graphql.json`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Shopify-Access-Token": token,
+      "X-Shopify-Access-Token": accessToken,
     },
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -70,13 +60,38 @@ async function shopifyGraphql<T>(
 
   const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
   if (json.errors?.length) {
-    throw new Error(`Shopify GraphQL error: ${json.errors.map((e) => e.message).join("; ")}`);
+    throw new Error(
+      `Shopify GraphQL error: ${json.errors.map((e) => e.message).join("; ")}`
+    );
   }
   return json.data as T;
 }
 
-const PRODUCT_SEARCH_QUERY = /* GraphQL */ `
-  query SearchProducts($query: String!, $first: Int!) {
+/**
+ * Two query variants: with market-contextual pricing (when a market country
+ * is configured) and without (base shop prices).
+ */
+function buildSearchQuery(withMarketPricing: boolean): string {
+  const productPricing = withMarketPricing
+    ? `contextualPricing(context: { country: $country }) {
+        minVariantPricing { price { amount currencyCode } }
+        maxVariantPricing { price { amount currencyCode } }
+      }`
+    : `priceRangeV2 {
+        minVariantPrice { amount currencyCode }
+        maxVariantPrice { amount currencyCode }
+      }`;
+
+  const variantPricing = withMarketPricing
+    ? `contextualPricing(context: { country: $country }) { price { amount currencyCode } }`
+    : `price`;
+
+  const vars = withMarketPricing
+    ? `$query: String!, $first: Int!, $country: CountryCode!`
+    : `$query: String!, $first: Int!`;
+
+  return `
+  query SearchProducts(${vars}) {
     products(first: $first, query: $query) {
       edges {
         node {
@@ -87,37 +102,38 @@ const PRODUCT_SEARCH_QUERY = /* GraphQL */ `
           productType
           vendor
           tags
-          onlineStoreUrl
           totalInventory
-          featuredImage {
-            url
-          }
-          priceRangeV2 {
-            minVariantPrice {
-              amount
-              currencyCode
-            }
-            maxVariantPrice {
-              amount
-              currencyCode
-            }
-          }
-          variants(first: 25) {
+          ${productPricing}
+          variants(first: ${MAX_RESULTS}) {
             edges {
               node {
                 id
                 title
-                price
                 availableForSale
                 inventoryQuantity
+                ${variantPricing}
               }
             }
           }
         }
       }
     }
-  }
-`;
+  }`;
+}
+
+interface Money {
+  amount: string;
+  currencyCode: string;
+}
+
+interface RawVariantNode {
+  id: string;
+  title: string;
+  availableForSale: boolean;
+  inventoryQuantity: number | null;
+  price?: string;
+  contextualPricing?: { price: Money | null } | null;
+}
 
 interface RawProductNode {
   id: string;
@@ -127,14 +143,13 @@ interface RawProductNode {
   productType: string;
   vendor: string;
   tags: string[];
-  onlineStoreUrl: string | null;
   totalInventory: number | null;
-  featuredImage: { url: string } | null;
-  priceRangeV2: {
-    minVariantPrice: { amount: string; currencyCode: string };
-    maxVariantPrice: { amount: string; currencyCode: string };
-  };
-  variants: { edges: { node: ProductVariant }[] };
+  priceRangeV2?: { minVariantPrice: Money; maxVariantPrice: Money };
+  contextualPricing?: {
+    minVariantPricing: { price: Money } | null;
+    maxVariantPricing: { price: Money } | null;
+  } | null;
+  variants: { edges: { node: RawVariantNode }[] };
 }
 
 interface SearchProductsData {
@@ -142,11 +157,15 @@ interface SearchProductsData {
 }
 
 function toProductSummary(node: RawProductNode): ProductSummary {
-  // Omit image URLs so the model cannot dump raw CDN markdown into chat replies.
-  const description = node.description
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 400);
+  const min =
+    node.contextualPricing?.minVariantPricing?.price ??
+    node.priceRangeV2?.minVariantPrice;
+  const max =
+    node.contextualPricing?.maxVariantPricing?.price ??
+    node.priceRangeV2?.maxVariantPrice;
+
+  // Strip images/URLs and hard-cap description length; the model summarizes it.
+  const description = node.description.replace(/\s+/g, " ").trim().slice(0, 400);
 
   return {
     id: node.id,
@@ -156,34 +175,39 @@ function toProductSummary(node: RawProductNode): ProductSummary {
     productType: node.productType,
     vendor: node.vendor,
     tags: node.tags,
-    onlineStoreUrl: null,
     priceRange: {
-      min: node.priceRangeV2.minVariantPrice.amount,
-      max: node.priceRangeV2.maxVariantPrice.amount,
-      currency: node.priceRangeV2.minVariantPrice.currencyCode,
+      min: min?.amount ?? "unknown",
+      max: max?.amount ?? "unknown",
+      currency: min?.currencyCode ?? "",
     },
     totalInventory: node.totalInventory,
-    imageUrl: null,
-    variants: node.variants.edges.map((e) => ({
-      id: e.node.id,
-      title: e.node.title,
-      price: e.node.price,
-      availableForSale: e.node.availableForSale,
-      inventoryQuantity: e.node.inventoryQuantity,
+    variants: node.variants.edges.map(({ node: v }) => ({
+      id: v.id,
+      title: v.title,
+      price: v.contextualPricing?.price?.amount ?? v.price ?? "unknown",
+      availableForSale: v.availableForSale,
+      inventoryQuantity: v.inventoryQuantity,
     })),
   };
 }
 
 /** Search store products by keyword (matches title, type, vendor, and tags). */
-export async function searchProducts(keyword: string, limit = 10): Promise<ProductSummary[]> {
+export async function searchProducts(
+  keyword: string,
+  limit = 10
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
   const sanitized = keyword.replace(/["\\]/g, " ").trim();
-  const data = await shopifyGraphql<SearchProductsData>(PRODUCT_SEARCH_QUERY, {
-    query: sanitized,
-    first: Math.min(Math.max(limit, 1), 25),
-  });
-  return data.products.edges.map((e) => toProductSummary(e.node));
-}
 
-export function isShopifyConfigError(err: unknown): boolean {
-  return err instanceof ShopifyConfigError;
+  const variables: Record<string, unknown> = {
+    query: sanitized,
+    first: Math.min(Math.max(limit, 1), MAX_RESULTS),
+  };
+  if (marketCountry) variables.country = marketCountry;
+
+  const data = await shopifyGraphql<SearchProductsData>(
+    buildSearchQuery(Boolean(marketCountry)),
+    variables
+  );
+  return data.products.edges.map((e) => toProductSummary(e.node));
 }

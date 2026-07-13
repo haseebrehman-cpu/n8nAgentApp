@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import MessageContent, { sanitizeReply } from "@/components/MessageContent";
+import MessageContent from "@/components/MessageContent";
+import { sanitizeReply } from "@/lib/sanitize";
 
 interface ChatMessage {
   id: string;
@@ -16,6 +17,7 @@ interface ChatOption {
 }
 
 const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Our Store";
+const STORAGE_KEY = "chat-widget-history-v1";
 
 const WELCOME_MESSAGE = `Welcome to **${STORE_NAME}**. I'm your shopping assistant.\n\nHow can I help you today? Choose an option below, or type your question.`;
 
@@ -39,20 +41,42 @@ function nextId() {
   return `msg-${Date.now()}-${idCounter}`;
 }
 
+function loadStoredMessages(): ChatMessage[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (m): m is ChatMessage =>
+        typeof m === "object" &&
+        m !== null &&
+        typeof m.id === "string" &&
+        (m.role === "user" || m.role === "assistant") &&
+        typeof m.content === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(loadStoredMessages);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  function toggleOpen() {
-    if (!isOpen && messages.length === 0) {
-      setMessages([{ id: nextId(), role: "assistant", content: WELCOME_MESSAGE }]);
+  // Persist conversation for the browser session so a page refresh keeps context.
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    } catch {
+      // storage full or unavailable — persistence is best-effort
     }
-    setIsOpen(!isOpen);
-  }
+  }, [messages]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -64,6 +88,13 @@ export default function ChatWidget() {
   useEffect(() => {
     if (isOpen) inputRef.current?.focus();
   }, [isOpen]);
+
+  function toggleOpen() {
+    if (!isOpen && messages.length === 0) {
+      setMessages([{ id: nextId(), role: "assistant", content: WELCOME_MESSAGE }]);
+    }
+    setIsOpen(!isOpen);
+  }
 
   function pushAssistant(content: string) {
     setMessages((prev) => [...prev, { id: nextId(), role: "assistant", content }]);
@@ -101,21 +132,19 @@ export default function ChatWidget() {
           messages: nextMessages.map(({ role, content }) => ({ role, content })),
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+
       if (!res.ok) {
         pushAssistant(
-          data?.error ??
-            "Sorry, something went wrong on our side. Please try again in a moment."
+          data?.error ?? "Something went wrong on our side. Please try again in a moment."
         );
         return;
       }
       pushAssistant(
-        sanitizeReply(data.reply || "I didn't catch that. Could you rephrase your question?")
+        sanitizeReply(data?.reply || "I didn't catch that. Could you rephrase your question?")
       );
     } catch {
-      pushAssistant(
-        "I couldn't reach the assistant right now. Please try again shortly."
-      );
+      pushAssistant("I couldn't reach the assistant right now. Please try again shortly.");
     } finally {
       setIsTyping(false);
     }
@@ -237,6 +266,7 @@ export default function ChatWidget() {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask about our products..."
               disabled={isTyping}
+              maxLength={1000}
               className="flex-1 rounded-full border border-slate-300 bg-slate-50 px-4 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60"
             />
             <button

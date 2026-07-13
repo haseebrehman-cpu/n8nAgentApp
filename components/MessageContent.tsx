@@ -1,22 +1,13 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
-
-/** Strip raw image markdown / CDN URLs and normalize bullets for markdown parsing. */
-export function sanitizeReply(text: string): string {
-  return text
-    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
-    .replace(/https?:\/\/cdn\.shopify\.com\S+/gi, "")
-    .replace(/^[ \t]*[•●▪︎]/gm, "- ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
+import { sanitizeReply } from "@/lib/sanitize";
 
 export default function MessageContent({ content }: { content: string }) {
   const cleaned = sanitizeReply(content);
 
   return (
-    <div className="chat-md w-full text-left text-[13.5px] leading-relaxed text-slate-700">
+    <div className="w-full text-left text-[13.5px] leading-relaxed text-slate-700">
       <ReactMarkdown
         components={{
           p: ({ children }) => (

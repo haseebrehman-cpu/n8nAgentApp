@@ -62,7 +62,7 @@ function loadStoredMessages(): ChatMessage[] {
         m !== null &&
         typeof m.id === "string" &&
         (m.role === "user" || m.role === "assistant") &&
-        typeof m.content === "string"
+        typeof m.content === "string",
     );
   } catch {
     return [];
@@ -136,7 +136,12 @@ export default function ChatWidget() {
   function toggleOpen() {
     if (!isOpen && messages.length === 0) {
       setMessages([
-        { id: nextId(), role: "assistant", content: WELCOME_MESSAGE, showMenu: true },
+        {
+          id: nextId(),
+          role: "assistant",
+          content: WELCOME_MESSAGE,
+          showMenu: true,
+        },
       ]);
     }
     setIsOpen(!isOpen);
@@ -188,7 +193,11 @@ export default function ChatWidget() {
       return;
     }
 
-    const userMessage: ChatMessage = { id: nextId(), role: "user", content: trimmed };
+    const userMessage: ChatMessage = {
+      id: nextId(),
+      role: "user",
+      content: trimmed,
+    };
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     setInput("");
@@ -200,7 +209,10 @@ export default function ChatWidget() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+          messages: nextMessages.map(({ role, content }) => ({
+            role,
+            content,
+          })),
         }),
       });
       console.log("[chat-widget] /api/chat response:", res.status);
@@ -208,23 +220,28 @@ export default function ChatWidget() {
 
       if (!res.ok) {
         pushAssistant(
-          data?.error ?? "Something went wrong on our side. Please try again in a moment."
+          data?.error ??
+            "Something went wrong on our side. Please try again in a moment.",
         );
         return;
       }
       pushAssistant(
-        sanitizeReply(data?.reply || "I didn't catch that. Could you rephrase your question?")
+        sanitizeReply(
+          data?.reply ||
+            "I didn't catch that. Could you rephrase your question?",
+        ),
       );
     } catch {
-      pushAssistant("I couldn't reach the assistant right now. Please try again shortly.");
+      pushAssistant(
+        "I couldn't reach the assistant right now. Please try again shortly.",
+      );
     } finally {
       setIsTyping(false);
     }
   }
 
   /** Show the M hint once the user is past the opening menu. */
-  const showMenuHint =
-    messages.filter((m) => m.role === "user").length >= 1;
+  const showMenuHint = messages.filter((m) => m.role === "user").length >= 1;
 
   return (
     <>
@@ -236,11 +253,23 @@ export default function ChatWidget() {
         className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 transition hover:scale-105 hover:bg-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
       >
         {isOpen ? (
-          <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="2">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            className="h-6 w-6"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
           </svg>
         ) : (
-          <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="2">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            className="h-6 w-6"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -256,7 +285,13 @@ export default function ChatWidget() {
           {/* Header */}
           <div className="flex items-center gap-3 bg-indigo-600 px-4 py-3.5 text-white">
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
-              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-5 w-5"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -265,7 +300,9 @@ export default function ChatWidget() {
               </svg>
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{STORE_NAME} Assistant</p>
+              <p className="truncate text-sm font-semibold">
+                {STORE_NAME} Assistant
+              </p>
               <p className="flex items-center gap-1.5 text-xs text-indigo-100">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                 Online — we typically reply instantly
@@ -274,39 +311,46 @@ export default function ChatWidget() {
           </div>
 
           {/* Messages */}
-          <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4">
+          <div
+            ref={scrollRef}
+            className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
+          >
             {messages.map((message, index) => {
               const isLatestAssistant =
                 message.role === "assistant" &&
                 index === messages.findLastIndex((m) => m.role === "assistant");
 
               return (
-              <div key={message.id} className="w-full">
-                <div
-                  className={
-                    message.role === "user"
-                      ? "ml-auto w-fit max-w-[88%] rounded-2xl rounded-br-md bg-indigo-600 px-3.5 py-2.5 text-left text-sm leading-relaxed text-white"
-                      : "mr-auto w-full max-w-[95%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3.5 py-3 text-left shadow-sm"
-                  }
-                >
-                  {message.role === "assistant" ? (
-                    <MessageContent content={message.content} />
-                  ) : (
-                    message.content
+                <div key={message.id} className="w-full">
+                  <div
+                    className={
+                      message.role === "user"
+                        ? "ml-auto w-fit max-w-[88%] rounded-2xl rounded-br-md bg-indigo-600 px-3.5 py-2.5 text-left text-sm leading-relaxed text-white"
+                        : "mr-auto w-full max-w-[95%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3.5 py-3 text-left shadow-sm"
+                    }
+                  >
+                    {message.role === "assistant" ? (
+                      <MessageContent content={message.content} />
+                    ) : (
+                      message.content
+                    )}
+                  </div>
+
+                  {message.role === "assistant" && message.showMenu && (
+                    <OptionButtons
+                      disabled={isTyping}
+                      onSelect={handleOptionClick}
+                    />
+                  )}
+
+                  {isLatestAssistant && !message.showMenu && showMenuHint && (
+                    <p className="mt-1.5 px-1 text-left text-[11px] text-slate-400">
+                      Reply with{" "}
+                      <span className="font-semibold text-slate-500">M</span>{" "}
+                      for the main menu
+                    </p>
                   )}
                 </div>
-
-                {message.role === "assistant" && message.showMenu && (
-                  <OptionButtons disabled={isTyping} onSelect={handleOptionClick} />
-                )}
-
-                {isLatestAssistant && !message.showMenu && showMenuHint && (
-                  <p className="mt-1.5 px-1 text-left text-[11px] text-slate-400">
-                    Reply with <span className="font-semibold text-slate-500">M</span> for
-                    the main menu
-                  </p>
-                )}
-              </div>
               );
             })}
 
@@ -342,8 +386,18 @@ export default function ChatWidget() {
               aria-label="Send message"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white transition hover:bg-indigo-500 disabled:opacity-40"
             >
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h13m0 0l-5-5m5 5l-5 5" />
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-4 w-4"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M5 12h13m0 0l-5-5m5 5l-5 5"
+                />
               </svg>
             </button>
           </form>

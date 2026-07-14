@@ -27,7 +27,10 @@ export interface RedisConfig {
   url: string | null;
   /** Logical key namespace shared across all Redis keys. */
   keyPrefix: string;
-  /** Product search cache TTL in seconds (hot path protection for Shopify). */
+  /**
+   * TTL for product-by-id payloads and non-empty search→id indexes (seconds).
+   * Default 30 minutes — balance Shopify load vs price/stock freshness.
+   */
   productCacheTtlSeconds: number;
   /** Empty-result (negative) cache TTL — shorter so new products appear sooner. */
   productCacheEmptyTtlSeconds: number;
@@ -90,7 +93,7 @@ export function getRedisConfig(): RedisConfig {
 
   const productCacheTtlSeconds = parsePositiveInt(
     process.env.PRODUCT_CACHE_TTL_SECONDS,
-    60
+    1800
   );
   const productCacheEmptyTtlSeconds = parsePositiveInt(
     process.env.PRODUCT_CACHE_EMPTY_TTL_SECONDS,

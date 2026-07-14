@@ -40,7 +40,7 @@ Copy `.env.example` to `.env.local` and fill in:
 | `NEXT_PUBLIC_STORE_NAME` | No | Your store's display name in the widget |
 | `REDIS_URL` | **Production: Yes** | Redis connection URL (`redis://` or `rediss://`). Local/dev works without it (in-memory fallback). |
 | `REDIS_KEY_PREFIX` | No | Key namespace (default `n8napp`) |
-| `PRODUCT_CACHE_TTL_SECONDS` | No | Product search cache TTL (default `60`) |
+| `PRODUCT_CACHE_TTL_SECONDS` | No | Product-by-id + search→id cache TTL (default `1800` = 30 min) |
 | `PRODUCT_CACHE_EMPTY_TTL_SECONDS` | No | Empty-result cache TTL (default `20`) |
 
 ### 3. Run
@@ -63,7 +63,7 @@ components/
 lib/
   chat-agent.ts        # OpenAI tool-calling agent loop
   shopify.ts           # Shopify Admin GraphQL client (market-aware pricing, timeouts)
-  product-cache.ts     # Redis product search cache + cross-instance coalescing
+  product-cache.ts     # Redis two-layer cache (search→IDs + product-by-id) + coalescing
   redis.ts             # Shared ioredis singleton (redis:// / rediss://)
   system-prompt.ts     # Assistant rules: scope, tool usage, formatting
   config.ts            # Env validation (fails fast with clear messages)

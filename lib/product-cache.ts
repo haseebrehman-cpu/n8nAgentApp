@@ -1,10 +1,15 @@
 /**
- * Product search cache + cross-instance request coalescing.
+ * Two-layer product cache + cross-instance request coalescing.
  *
- * At high chat volume, identical catalog queries dominate. This layer:
- * 1. Serves hot results from Redis (short TTL so price/stock stay fresh)
- * 2. Negative-caches empty results briefly (stampede protection)
- * 3. Coalesces concurrent identical misses (in-process + Redis lock)
+ * 1. Search index: normalized keyword → product IDs (cheap; many phrasings can share IDs)
+ * 2. Product payload: Shopify product ID → ProductSummary (price/stock, longer TTL)
+ * 3. Negative-cache empty searches briefly (stampede protection)
+ * 4. Coalesce concurrent identical misses (in-process + Redis lock)
+ *
+ * Different wordings still need Shopify once to resolve to IDs, but after that
+ * overlapping products are served from the by-id layer without re-storing full
+ * payloads per search phrase. Stronger keyword normalization also collapses
+ * common variants ("price of Wako Shin Guard" ≈ "wako shin guard").
  */
 
 import { createHash } from "crypto";
@@ -16,11 +21,61 @@ const LOCK_TTL_SECONDS = 12;
 const LOCK_WAIT_MS = 8_000;
 const LOCK_POLL_MS = 50;
 
+/** Filler words stripped so cache keys focus on distinctive product tokens. */
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "with",
+  "and",
+  "or",
+  "for",
+  "of",
+  "in",
+  "to",
+  "set",
+  "ft",
+  "what",
+  "is",
+  "are",
+  "how",
+  "much",
+  "price",
+  "cost",
+  "costs",
+  "this",
+  "that",
+  "please",
+  "me",
+  "my",
+  "do",
+  "you",
+  "have",
+  "got",
+  "show",
+  "tell",
+  "about",
+  "info",
+  "information",
+]);
+
 /** In-process singleflight map (same Node isolate). */
 const inflight = new Map<string, Promise<ProductSummary[]>>();
 
-function normalizeKeyword(keyword: string): string {
-  return keyword.trim().toLowerCase().replace(/\s+/g, " ");
+/**
+ * Normalize search text for cache keys: lower-case, drop stop words,
+ * unique sorted tokens so word order does not matter.
+ */
+export function normalizeKeyword(keyword: string): string {
+  const tokens = keyword
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.replace(/^-+|-+$/g, ""))
+    .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
+
+  return [...new Set(tokens)].sort().join(" ");
 }
 
 function cacheFingerprint(
@@ -28,11 +83,17 @@ function cacheFingerprint(
   limit: number,
   marketCountry: string | null
 ): string {
-  const raw = `${normalizeKeyword(keyword)}|${limit}|${marketCountry ?? ""}`;
+  const normalized = normalizeKeyword(keyword) || normalizeKeywordLoose(keyword);
+  const raw = `${normalized}|${limit}|${marketCountry ?? ""}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
 
-function cacheKey(fingerprint: string): string {
+/** Fallback when everything was stop words — keep a minimal key. */
+function normalizeKeywordLoose(keyword: string): string {
+  return keyword.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function searchKey(fingerprint: string): string {
   return redisKey("product", "search", fingerprint);
 }
 
@@ -40,31 +101,110 @@ function lockKey(fingerprint: string): string {
   return redisKey("product", "lock", fingerprint);
 }
 
-async function readCache(fingerprint: string): Promise<ProductSummary[] | null> {
+function productByIdKey(productId: string, marketCountry: string | null): string {
+  const idHash = createHash("sha256").update(productId).digest("hex").slice(0, 24);
+  return redisKey("product", "by-id", marketCountry ?? "_", idHash);
+}
+
+function isProductSummary(value: unknown): value is ProductSummary {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ProductSummary).id === "string" &&
+    typeof (value as ProductSummary).title === "string"
+  );
+}
+
+async function readSearchIds(fingerprint: string): Promise<{
+  ids: string[] | null;
+  /** Legacy entries stored the full product array under the search key. */
+  legacyProducts: ProductSummary[] | null;
+}> {
+  const redis = await getRedis();
+  if (!redis) return { ids: null, legacyProducts: null };
+
+  try {
+    const raw = await redis.get(searchKey(fingerprint));
+    if (raw == null) return { ids: null, legacyProducts: null };
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return { ids: null, legacyProducts: null };
+
+    if (parsed.length === 0) {
+      console.log(`[product-cache] HIT search ${searchKey(fingerprint)} (empty)`);
+      return { ids: [], legacyProducts: null };
+    }
+
+    if (parsed.every((x) => typeof x === "string")) {
+      console.log(
+        `[product-cache] HIT search ${searchKey(fingerprint)} (${parsed.length} ids)`
+      );
+      return { ids: parsed as string[], legacyProducts: null };
+    }
+
+    if (parsed.every(isProductSummary)) {
+      console.log(
+        `[product-cache] HIT search (legacy payloads) ${searchKey(fingerprint)} (${parsed.length})`
+      );
+      return { ids: null, legacyProducts: parsed as ProductSummary[] };
+    }
+
+    return { ids: null, legacyProducts: null };
+  } catch (err) {
+    console.error(
+      "[product-cache] search read failed:",
+      err instanceof Error ? err.message : err
+    );
+    return { ids: null, legacyProducts: null };
+  }
+}
+
+async function readProductsByIds(
+  ids: string[],
+  marketCountry: string | null
+): Promise<ProductSummary[] | null> {
+  if (ids.length === 0) return [];
+
   const redis = await getRedis();
   if (!redis) return null;
 
   try {
-    const raw = await redis.get(cacheKey(fingerprint));
-    if (raw == null) return null;
-    const parsed = JSON.parse(raw) as ProductSummary[];
-    if (!Array.isArray(parsed)) return null;
+    const keys = ids.map((id) => productByIdKey(id, marketCountry));
+    const rows = await redis.mget(...keys);
+    const products: ProductSummary[] = [];
+
+    for (let i = 0; i < ids.length; i++) {
+      const raw = rows[i];
+      if (raw == null) {
+        console.log(
+          `[product-cache] by-id MISS ${keys[i]} — incomplete hydrate, will refetch`
+        );
+        return null;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!isProductSummary(parsed) || parsed.id !== ids[i]) {
+        return null;
+      }
+      products.push(parsed);
+    }
+
     console.log(
-      `[product-cache] HIT ${cacheKey(fingerprint)} (${parsed.length} products)`
+      `[product-cache] HIT by-id ×${products.length} (market=${marketCountry ?? "_"})`
     );
-    return parsed;
+    return products;
   } catch (err) {
     console.error(
-      "[product-cache] read failed:",
+      "[product-cache] by-id read failed:",
       err instanceof Error ? err.message : err
     );
     return null;
   }
 }
 
-async function writeCache(
+async function writeSearchAndProducts(
   fingerprint: string,
-  products: ProductSummary[]
+  products: ProductSummary[],
+  marketCountry: string | null
 ): Promise<void> {
   const redis = await getRedis();
   if (!redis) {
@@ -75,13 +215,34 @@ async function writeCache(
   }
 
   const { productCacheTtlSeconds, productCacheEmptyTtlSeconds } = getRedisConfig();
-  const ttl =
+  const searchTtl =
     products.length === 0 ? productCacheEmptyTtlSeconds : productCacheTtlSeconds;
+  const productTtl = productCacheTtlSeconds;
 
   try {
-    await redis.set(cacheKey(fingerprint), JSON.stringify(products), "EX", ttl);
+    const pipeline = redis.pipeline();
+
+    if (products.length === 0) {
+      pipeline.set(searchKey(fingerprint), JSON.stringify([]), "EX", searchTtl);
+    } else {
+      const ids = products.map((p) => p.id);
+      pipeline.set(searchKey(fingerprint), JSON.stringify(ids), "EX", searchTtl);
+      for (const product of products) {
+        pipeline.set(
+          productByIdKey(product.id, marketCountry),
+          JSON.stringify(product),
+          "EX",
+          productTtl
+        );
+      }
+    }
+
+    await pipeline.exec();
     console.log(
-      `[product-cache] SET ${cacheKey(fingerprint)} (${products.length} products, ttl=${ttl}s)`
+      `[product-cache] SET search ${searchKey(fingerprint)} (${products.length} ids, ttl=${searchTtl}s)` +
+        (products.length
+          ? ` + by-id ×${products.length} (ttl=${productTtl}s)`
+          : "")
     );
   } catch (err) {
     console.error(
@@ -91,9 +252,19 @@ async function writeCache(
   }
 }
 
+async function resolveFromCache(
+  fingerprint: string,
+  marketCountry: string | null
+): Promise<ProductSummary[] | null> {
+  const { ids, legacyProducts } = await readSearchIds(fingerprint);
+  if (legacyProducts !== null) return legacyProducts;
+  if (ids === null) return null;
+  return readProductsByIds(ids, marketCountry);
+}
+
 async function acquireLock(fingerprint: string): Promise<boolean> {
   const redis = await getRedis();
-  if (!redis) return true; // no Redis → caller is the only coalescer (in-process)
+  if (!redis) return true;
 
   try {
     const ok = await redis.set(
@@ -105,7 +276,7 @@ async function acquireLock(fingerprint: string): Promise<boolean> {
     );
     return ok === "OK";
   } catch {
-    return true; // on Redis error, proceed (prefer availability over perfect coalescing)
+    return true;
   }
 }
 
@@ -121,11 +292,12 @@ async function releaseLock(fingerprint: string): Promise<void> {
 
 async function waitForCache(
   fingerprint: string,
+  marketCountry: string | null,
   timeoutMs: number
 ): Promise<ProductSummary[] | null> {
   const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-    const hit = await readCache(fingerprint);
+  while (Date.now() < deadline) {
+    const hit = await resolveFromCache(fingerprint, marketCountry);
     if (hit !== null) return hit;
     await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
   }
@@ -144,7 +316,7 @@ export async function cachedProductSearch(
 ): Promise<ProductSummary[]> {
   const fingerprint = cacheFingerprint(keyword, limit, marketCountry);
 
-    const cached = await readCache(fingerprint);
+  const cached = await resolveFromCache(fingerprint, marketCountry);
   if (cached !== null) return cached;
 
   const existing = inflight.get(fingerprint);
@@ -153,21 +325,19 @@ export async function cachedProductSearch(
   const promise = (async () => {
     const gotLock = await acquireLock(fingerprint);
     if (!gotLock) {
-      const fromPeer = await waitForCache(fingerprint, LOCK_WAIT_MS);
+      const fromPeer = await waitForCache(fingerprint, marketCountry, LOCK_WAIT_MS);
       if (fromPeer !== null) return fromPeer;
-      // Peer failed or timed out — fall through and fetch ourselves
     }
 
     try {
-      // Double-check after lock (another instance may have written)
-      const again = await readCache(fingerprint);
+      const again = await resolveFromCache(fingerprint, marketCountry);
       if (again !== null) return again;
 
       console.log(
-        `[product-cache] MISS ${cacheKey(fingerprint)} — fetching Shopify`
+        `[product-cache] MISS ${searchKey(fingerprint)} — fetching Shopify`
       );
       const products = await fetcher();
-      await writeCache(fingerprint, products);
+      await writeSearchAndProducts(fingerprint, products, marketCountry);
       return products;
     } finally {
       if (gotLock) await releaseLock(fingerprint);

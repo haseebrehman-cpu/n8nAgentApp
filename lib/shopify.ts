@@ -251,7 +251,7 @@ async function searchProductsUncached(
 
 /**
  * Search store products by keyword (title, type, vendor, tags).
- * Results are Redis-cached with short TTL + request coalescing under load.
+ * Results use two-layer Redis cache (search→IDs + product-by-id) with coalescing.
  */
 export async function searchProducts(
   keyword: string,

@@ -83,8 +83,6 @@ function checkRateLimitMemory(key: string): RateLimitResult {
   return { allowed: true, retryAfterSeconds: 0 };
 }
 
-// --- Redis ----------------------------------------------------------------
-
 let loggedRedisRateLimit = false;
 let loggedMemoryRateLimit = false;
 

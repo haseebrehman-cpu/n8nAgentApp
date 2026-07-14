@@ -3,6 +3,10 @@
  *
  * Prices are resolved per market when SHOPIFY_MARKET_COUNTRY is set,
  * so the assistant quotes exactly what customers see on the storefront.
+ *
+ * All catalog lookups are scoped to ACTIVE products published on the
+ * Online Store channel — drafts, archives, and Admin-only duplicates
+ * (e.g. "… (Copy)") never reach the assistant.
  */
 
 import { getShopifyConfig } from "@/lib/config";
@@ -14,6 +18,16 @@ export type { ProductSummary };
 const API_VERSION = "2025-07";
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESULTS = 25;
+/** Page size when scanning the catalog for discounts. */
+const DISCOUNT_PAGE_SIZE = 50;
+/** Soft cap so a huge catalog cannot loop forever. */
+const DISCOUNT_MAX_PAGES = 10;
+const DISCOUNT_RESULT_LIMIT = 25;
+
+/**
+ * Admin product search scope matching what customers can see.
+ */
+const STOREFRONT_SCOPE = "status:ACTIVE";
 
 async function shopifyGraphql<T>(
   query: string,
@@ -49,6 +63,7 @@ async function shopifyGraphql<T>(
 /**
  * Two query variants: with market-contextual pricing (when a market country
  * is configured) and without (base shop prices).
+ * Supports cursor pagination via $after.
  */
 function buildSearchQuery(withMarketPricing: boolean): string {
   const productPricing = withMarketPricing
@@ -62,16 +77,24 @@ function buildSearchQuery(withMarketPricing: boolean): string {
       }`;
 
   const variantPricing = withMarketPricing
-    ? `contextualPricing(context: { country: $country }) { price { amount currencyCode } }`
-    : `price`;
+    ? `contextualPricing(context: { country: $country }) {
+        price { amount currencyCode }
+        compareAtPrice { amount currencyCode }
+      }`
+    : `price
+       compareAtPrice`;
 
   const vars = withMarketPricing
-    ? `$query: String!, $first: Int!, $country: CountryCode!`
-    : `$query: String!, $first: Int!`;
+    ? `$query: String!, $first: Int!, $after: String, $country: CountryCode!`
+    : `$query: String!, $first: Int!, $after: String`;
 
   return `
   query SearchProducts(${vars}) {
-    products(first: $first, query: $query) {
+    products(first: $first, after: $after, query: $query) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       edges {
         node {
           id
@@ -111,7 +134,11 @@ interface RawVariantNode {
   availableForSale: boolean;
   inventoryQuantity: number | null;
   price?: string;
-  contextualPricing?: { price: Money | null } | null;
+  compareAtPrice?: string | null;
+  contextualPricing?: {
+    price: Money | null;
+    compareAtPrice: Money | null;
+  } | null;
 }
 
 interface RawProductNode {
@@ -132,7 +159,10 @@ interface RawProductNode {
 }
 
 interface SearchProductsData {
-  products: { edges: { node: RawProductNode }[] };
+  products: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    edges: { node: RawProductNode }[];
+  };
 }
 
 function toProductSummary(node: RawProductNode): ProductSummary {
@@ -145,6 +175,20 @@ function toProductSummary(node: RawProductNode): ProductSummary {
 
   // Strip images/URLs and hard-cap description length; the model summarizes it.
   const description = node.description.replace(/\s+/g, " ").trim().slice(0, 400);
+
+  const variants = node.variants.edges.map(({ node: v }) => {
+    const price = v.contextualPricing?.price?.amount ?? v.price ?? "unknown";
+    const compareAtPrice =
+      v.contextualPricing?.compareAtPrice?.amount ?? v.compareAtPrice ?? null;
+    return {
+      id: v.id,
+      title: v.title,
+      price,
+      compareAtPrice: isRealDiscount(price, compareAtPrice) ? compareAtPrice : null,
+      availableForSale: v.availableForSale,
+      inventoryQuantity: v.inventoryQuantity,
+    };
+  });
 
   return {
     id: node.id,
@@ -159,15 +203,34 @@ function toProductSummary(node: RawProductNode): ProductSummary {
       max: max?.amount ?? "unknown",
       currency: min?.currencyCode ?? "",
     },
+    onSale: variants.some((v) => v.compareAtPrice !== null),
     totalInventory: node.totalInventory,
-    variants: node.variants.edges.map(({ node: v }) => ({
-      id: v.id,
-      title: v.title,
-      price: v.contextualPricing?.price?.amount ?? v.price ?? "unknown",
-      availableForSale: v.availableForSale,
-      inventoryQuantity: v.inventoryQuantity,
-    })),
+    variants,
   };
+}
+
+/** A genuine discount requires a compare-at price strictly greater than the price. */
+function isRealDiscount(price: string, compareAtPrice: string | null): boolean {
+  if (!compareAtPrice) return false;
+  const p = Number.parseFloat(price);
+  const c = Number.parseFloat(compareAtPrice);
+  if (!Number.isFinite(p) || !Number.isFinite(c)) return false;
+  return c > p;
+}
+
+/** Combine a free-text keyword with the Online Store visibility scope. */
+function storefrontQuery(keyword?: string): string {
+  const k = keyword?.trim();
+  if (!k) return STOREFRONT_SCOPE;
+  return `${STOREFRONT_SCOPE} AND ${k}`;
+}
+
+/** Drop Admin-only noise that sometimes slips through (duplicate titles). */
+function isStorefrontWorthy(product: ProductSummary): boolean {
+  if (product.status && product.status.toUpperCase() !== "ACTIVE") return false;
+  // Shopify duplicates append "(Copy)" — never treat as a customer-facing listing
+  if (/\(copy\)/i.test(product.title)) return false;
+  return true;
 }
 
 const STOP_WORDS = new Set([
@@ -214,23 +277,37 @@ function buildSearchQueries(keyword: string): string[] {
     queries.push(tokens[0]);
   }
 
-  // Deduplicate while preserving order
-  return [...new Set(queries.filter(Boolean))];
+  // Deduplicate while preserving order, then wrap each in storefront scope
+  return [...new Set(queries.filter(Boolean))].map((q) => storefrontQuery(q));
 }
 
 async function runProductQuery(
   query: string,
   first: number,
-  marketCountry: string | null
-): Promise<ProductSummary[]> {
-  const variables: Record<string, unknown> = { query, first };
+  marketCountry: string | null,
+  after: string | null = null
+): Promise<{
+  products: ProductSummary[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}> {
+  const variables: Record<string, unknown> = { query, first, after };
   if (marketCountry) variables.country = marketCountry;
 
   const data = await shopifyGraphql<SearchProductsData>(
     buildSearchQuery(Boolean(marketCountry)),
     variables
   );
-  return data.products.edges.map((e) => toProductSummary(e.node));
+
+  const products = data.products.edges
+    .map((e) => toProductSummary(e.node))
+    .filter(isStorefrontWorthy);
+
+  return {
+    products,
+    hasNextPage: data.products.pageInfo.hasNextPage,
+    endCursor: data.products.pageInfo.endCursor,
+  };
 }
 
 async function searchProductsUncached(
@@ -242,7 +319,7 @@ async function searchProductsUncached(
   const queries = buildSearchQueries(keyword);
 
   for (const query of queries) {
-    const products = await runProductQuery(query, first, marketCountry);
+    const { products } = await runProductQuery(query, first, marketCountry);
     if (products.length > 0) return products;
   }
 
@@ -252,13 +329,49 @@ async function searchProductsUncached(
 /**
  * Search store products by keyword (title, type, vendor, tags).
  * Results use two-layer Redis cache (search→IDs + product-by-id) with coalescing.
+ * Only ACTIVE + Online Store published products are returned.
  */
 export async function searchProducts(
   keyword: string,
   limit = 10
 ): Promise<ProductSummary[]> {
   const { marketCountry } = getShopifyConfig();
-  return cachedProductSearch(keyword, limit, marketCountry, () =>
+  const results = await cachedProductSearch(keyword, limit, marketCountry, () =>
     searchProductsUncached(keyword, limit, marketCountry)
   );
+  // Drop stale cache entries that are not storefront-visible / are Admin copies
+  return results.filter(isStorefrontWorthy);
+}
+
+/**
+ * Return storefront-visible products that are genuinely on sale
+ * (compare-at price exceeds current price). Paginates the published
+ * catalog so sale items beyond the first page are not missed.
+ */
+export async function getDiscountedProducts(
+  limit = DISCOUNT_RESULT_LIMIT
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
+  const capped = Math.min(Math.max(limit, 1), DISCOUNT_RESULT_LIMIT);
+  const onSale: ProductSummary[] = [];
+  let after: string | null = null;
+
+  for (let page = 0; page < DISCOUNT_MAX_PAGES; page++) {
+    const { products, hasNextPage, endCursor } = await runProductQuery(
+      storefrontQuery(),
+      DISCOUNT_PAGE_SIZE,
+      marketCountry,
+      after
+    );
+
+    for (const p of products) {
+      if (p.onSale) onSale.push(p);
+      if (onSale.length >= capped) return onSale.slice(0, capped);
+    }
+
+    if (!hasNextPage || !endCursor) break;
+    after = endCursor;
+  }
+
+  return onSale;
 }

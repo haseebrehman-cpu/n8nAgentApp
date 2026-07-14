@@ -10,7 +10,7 @@ import type {
   ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
 import { getOpenAIConfig, isConfigError } from "@/lib/config";
-import { searchProducts } from "@/lib/shopify";
+import { getDiscountedProducts, searchProducts } from "@/lib/shopify";
 import { sanitizeReply } from "@/lib/sanitize";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import type { ChatMessagePayload } from "@/lib/types";
@@ -43,6 +43,19 @@ const tools: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "list_discounted_products",
+      description:
+        "List products that are currently on sale/discount (price reduced from the original). Use ONLY for questions about discounts, sales, offers, deals, or reduced prices. Do not pass a product name.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 /** Detect messages that should look up the catalog (not greetings / unavailable services). */
@@ -72,6 +85,13 @@ function shouldForceProductSearch(text: string): boolean {
   return true;
 }
 
+/** Detect questions about sales/discounts so we route to the discount tool. */
+function isDiscountQuery(text: string): boolean {
+  return /\b(discount|discounts|discounted|sale|sales|on\s+sale|offer|offers|deal|deals|reduced|clearance|promo|promotion|promotions|bargain|markdown)\b/i.test(
+    text
+  );
+}
+
 async function runTool(name: string, args: Record<string, unknown>): Promise<string> {
   try {
     if (name === "search_products") {
@@ -88,6 +108,22 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<str
       }
       return JSON.stringify({ results: products });
     }
+
+    if (name === "list_discounted_products") {
+      const products = await getDiscountedProducts();
+      if (products.length === 0) {
+        return JSON.stringify({
+          results: [],
+          hint:
+            "No products are currently on sale. Tell the customer there are no active discounts right now — do not invent any.",
+        });
+      }
+      return JSON.stringify({
+        results: products,
+        hint: `Found ${products.length} storefront product(s) on sale. List ALL of them briefly — do not omit any.`,
+      });
+    }
+
     return JSON.stringify({ error: `Unknown tool: ${name}` });
   } catch (err) {
     if (isConfigError(err)) {
@@ -119,7 +155,8 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
   const { model } = getOpenAIConfig();
 
   const lastUser = [...history].reverse().find((m) => m.role === "user")?.content ?? "";
-  const forceSearch = shouldForceProductSearch(lastUser);
+  const wantsDiscounts = isDiscountQuery(lastUser);
+  const forceSearch = !wantsDiscounts && shouldForceProductSearch(lastUser);
 
   const conversation: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -127,12 +164,17 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
   ];
 
   let sawEmptyCatalog = false;
+  let usedDiscountTool = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const toolChoice: ChatCompletionToolChoiceOption =
-      round === 0 && forceSearch
-        ? { type: "function", function: { name: "search_products" } }
-        : "auto";
+    let toolChoice: ChatCompletionToolChoiceOption = "auto";
+    if (round === 0) {
+      if (wantsDiscounts) {
+        toolChoice = { type: "function", function: { name: "list_discounted_products" } };
+      } else if (forceSearch) {
+        toolChoice = { type: "function", function: { name: "search_products" } };
+      }
+    }
 
     const completion = await client.chat.completions.create({
       model,
@@ -168,10 +210,13 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
       } catch {
         // empty args; the tool reports the problem back to the model
       }
+      const isDiscountTool = toolCall.function.name === "list_discounted_products";
+      if (isDiscountTool) usedDiscountTool = true;
       const result = await runTool(toolCall.function.name, args);
       try {
         const parsed = JSON.parse(result) as { results?: unknown[] };
-        if (Array.isArray(parsed.results) && parsed.results.length === 0) {
+        // Empty discount results are a valid answer ("no sales"), not a missing product.
+        if (!isDiscountTool && Array.isArray(parsed.results) && parsed.results.length === 0) {
           sawEmptyCatalog = true;
         } else if (Array.isArray(parsed.results) && parsed.results.length > 0) {
           sawEmptyCatalog = false;
@@ -187,5 +232,5 @@ export async function runChatAgent(history: ChatMessagePayload[]): Promise<strin
     }
   }
 
-  return sawEmptyCatalog ? NOT_AVAILABLE_REPLY : FALLBACK_REPLY;
+  return sawEmptyCatalog && !usedDiscountTool ? NOT_AVAILABLE_REPLY : FALLBACK_REPLY;
 }

@@ -3,19 +3,27 @@
  *
  * Production: Redis ZSET + Lua (atomic, shared across all app instances).
  * Local/dev (no REDIS_URL): in-memory Map — same semantics, single process only.
- *
- * Signature stays checkRateLimit(key) → RateLimitResult (now async).
+ * Production with Redis configured but unavailable: fail closed (deny).
  */
 
-import { getRedis, redisKey } from "@/lib/redis";
+import { getRedis, isRedisConfigured, redisKey } from "@/lib/redis";
+import { logger } from "@/lib/logger";
 
 const WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 20;
 const CLEANUP_INTERVAL_MS = 5 * 60_000;
+
+export type RateLimitBucket = "chat" | "order";
+
+const BUCKET_LIMITS: Record<RateLimitBucket, number> = {
+  chat: 20,
+  order: 8,
+};
 
 export interface RateLimitResult {
   allowed: boolean;
   retryAfterSeconds: number;
+  /** True when denied because Redis was required but unavailable. */
+  failClosed?: boolean;
 }
 
 /**
@@ -65,13 +73,16 @@ function cleanupMemory(now: number) {
   }
 }
 
-function checkRateLimitMemory(key: string): RateLimitResult {
+function checkRateLimitMemory(
+  storageKey: string,
+  maxRequests: number
+): RateLimitResult {
   const now = Date.now();
   cleanupMemory(now);
 
-  const recent = (hitLog.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  if (recent.length >= MAX_REQUESTS_PER_WINDOW) {
-    const oldest = recent[0];
+  const recent = (hitLog.get(storageKey) ?? []).filter((t) => now - t < WINDOW_MS);
+  if (recent.length >= maxRequests) {
+    const oldest = recent[0]!;
     return {
       allowed: false,
       retryAfterSeconds: Math.max(1, Math.ceil((oldest + WINDOW_MS - now) / 1000)),
@@ -79,26 +90,40 @@ function checkRateLimitMemory(key: string): RateLimitResult {
   }
 
   recent.push(now);
-  hitLog.set(key, recent);
+  hitLog.set(storageKey, recent);
   return { allowed: true, retryAfterSeconds: 0 };
 }
 
 let loggedRedisRateLimit = false;
 let loggedMemoryRateLimit = false;
 
-async function checkRateLimitRedis(clientKey: string): Promise<RateLimitResult> {
+function isProduction(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+async function checkRateLimitRedis(
+  clientKey: string,
+  bucket: RateLimitBucket
+): Promise<RateLimitResult> {
+  const maxRequests = BUCKET_LIMITS[bucket];
   const redis = await getRedis();
+
   if (!redis) {
+    // Production with REDIS_URL set but unreachable → fail closed.
+    if (isProduction() && isRedisConfigured()) {
+      logger.error("rate-limit", "Redis unavailable — fail closed", { bucket });
+      return { allowed: false, retryAfterSeconds: 30, failClosed: true };
+    }
     if (!loggedMemoryRateLimit) {
       loggedMemoryRateLimit = true;
-      console.log("[rate-limit] using in-memory (Redis unavailable)");
+      logger.info("rate-limit", "using in-memory (Redis unavailable)");
     }
-    return checkRateLimitMemory(clientKey);
+    return checkRateLimitMemory(`${bucket}:${clientKey}`, maxRequests);
   }
 
   const now = Date.now();
   const member = `${now}-${Math.random().toString(36).slice(2, 10)}`;
-  const key = redisKey("rl", "chat", clientKey);
+  const key = redisKey("rl", bucket, clientKey);
 
   try {
     const result = (await redis.eval(
@@ -107,13 +132,13 @@ async function checkRateLimitRedis(clientKey: string): Promise<RateLimitResult> 
       key,
       String(now),
       String(WINDOW_MS),
-      String(MAX_REQUESTS_PER_WINDOW),
+      String(maxRequests),
       member
     )) as [number, number];
 
     if (!loggedRedisRateLimit) {
       loggedRedisRateLimit = true;
-      console.log(`[rate-limit] using Redis (key ${key.replace(/:[^:]+$/, ":*")})`);
+      logger.info("rate-limit", "using Redis", { bucket });
     }
 
     const allowed = Number(result[0]) === 1;
@@ -123,15 +148,27 @@ async function checkRateLimitRedis(clientKey: string): Promise<RateLimitResult> 
       retryAfterSeconds: allowed ? 0 : Math.max(1, Math.ceil(retryAfterMs / 1000)),
     };
   } catch (err) {
-    console.error(
-      "[rate-limit] Redis error, falling back to in-memory:",
-      err instanceof Error ? err.message : err
-    );
-    return checkRateLimitMemory(clientKey);
+    logger.error("rate-limit", "Redis error", {
+      bucket,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (isProduction() && isRedisConfigured()) {
+      return { allowed: false, retryAfterSeconds: 30, failClosed: true };
+    }
+    return checkRateLimitMemory(`${bucket}:${clientKey}`, maxRequests);
   }
 }
 
-/** Per-client sliding window (20 req / 60s). Safe across multiple instances when Redis is configured. */
-export async function checkRateLimit(key: string): Promise<RateLimitResult> {
-  return checkRateLimitRedis(key);
+export interface CheckRateLimitOptions {
+  /** Logical bucket — chat LLM vs order probes. Default: chat. */
+  bucket?: RateLimitBucket;
+}
+
+/** Per-client sliding window. Safe across multiple instances when Redis is configured. */
+export async function checkRateLimit(
+  key: string,
+  options: CheckRateLimitOptions = {}
+): Promise<RateLimitResult> {
+  const bucket = options.bucket ?? "chat";
+  return checkRateLimitRedis(key, bucket);
 }

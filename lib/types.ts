@@ -6,11 +6,16 @@ export interface ChatMessagePayload {
 }
 
 export interface ChatRequestBody {
-  messages: ChatMessagePayload[];
+  /** Preferred: single user turn; server owns history. */
+  message?: string;
+  /** Legacy: full history — only the last user message is used. */
+  messages?: ChatMessagePayload[];
+  region?: string;
 }
 
 export interface ChatSuccessResponse {
   reply: string;
+  requestId?: string;
 }
 
 export interface ChatErrorResponse {
@@ -31,6 +36,13 @@ export interface ProductSummary {
   id: string;
   title: string;
   status: string;
+  /** URL-safe storefront slug from Shopify. */
+  handle: string;
+  /**
+   * Public product page URL for the customer storefront.
+   * Null when neither SHOPIFY_STOREFRONT_URL nor Shopify onlineStoreUrl is available.
+   */
+  url: string | null;
   description: string;
   productType: string;
   vendor: string;

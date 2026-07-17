@@ -1,70 +1,34 @@
 /**
  * Shopify Admin GraphQL API client.
  *
- * Prices are resolved per market when SHOPIFY_MARKET_COUNTRY is set,
- * so the assistant quotes exactly what customers see on the storefront.
- *
- * All catalog lookups are scoped to ACTIVE products published on the
- * Online Store channel — drafts, archives, and Admin-only duplicates
- * (e.g. "… (Copy)") never reach the assistant.
+ * Prices are resolved per market when SHOPIFY_MARKET_COUNTRY is set.
+ * Catalog lookups are scoped to ACTIVE + published Online Store products.
  */
 
 import { getShopifyConfig } from "@/lib/config";
-import { cachedProductSearch } from "@/lib/product-cache";
+import {
+  cachedDiscountedProducts,
+  cachedProductSearch,
+} from "@/lib/product-cache";
+import { shopifyAdminGraphql } from "@/lib/shopify/admin-client";
 import type { ProductSummary } from "@/lib/types";
 
 export type { ProductSummary };
 
-const API_VERSION = "2025-07";
-const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESULTS = 25;
-/** Page size when scanning the catalog for discounts. */
 const DISCOUNT_PAGE_SIZE = 50;
-/** Soft cap so a huge catalog cannot loop forever. */
 const DISCOUNT_MAX_PAGES = 10;
-const DISCOUNT_RESULT_LIMIT = 25;
+const DISCOUNT_RESULT_LIMIT = 8;
 
-/**
- * Admin product search scope matching what customers can see.
- */
-const STOREFRONT_SCOPE = "status:ACTIVE";
+/** ACTIVE + published on Online Store channel. */
+const STOREFRONT_SCOPE = "status:ACTIVE published_status:published";
 
-async function shopifyGraphql<T>(
-  query: string,
-  variables: Record<string, unknown>
-): Promise<T> {
-  const { domain, accessToken } = getShopifyConfig();
-
-  const res = await fetch(`https://${domain}/admin/api/${API_VERSION}/graphql.json`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": accessToken,
-    },
-    body: JSON.stringify({ query, variables }),
-    cache: "no-store",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Shopify API error ${res.status}: ${body.slice(0, 300)}`);
-  }
-
-  const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
-  if (json.errors?.length) {
-    throw new Error(
-      `Shopify GraphQL error: ${json.errors.map((e) => e.message).join("; ")}`
-    );
-  }
-  return json.data as T;
+export interface ShopifyFetchOptions {
+  signal?: AbortSignal;
+  /** When listing a category, only include in-stock / available products. */
+  inStockOnly?: boolean;
 }
 
-/**
- * Two query variants: with market-contextual pricing (when a market country
- * is configured) and without (base shop prices).
- * Supports cursor pagination via $after.
- */
 function buildSearchQuery(withMarketPricing: boolean): string {
   const productPricing = withMarketPricing
     ? `contextualPricing(context: { country: $country }) {
@@ -76,11 +40,15 @@ function buildSearchQuery(withMarketPricing: boolean): string {
         maxVariantPrice { amount currencyCode }
       }`;
 
+  // Always fetch base price/compareAtPrice. Market compare-at can be null even
+  // when the variant has a real sale (e.g. FR market vs UK storefront).
   const variantPricing = withMarketPricing
-    ? `contextualPricing(context: { country: $country }) {
-        price { amount currencyCode }
-        compareAtPrice { amount currencyCode }
-      }`
+    ? `price
+       compareAtPrice
+       contextualPricing(context: { country: $country }) {
+         price { amount currencyCode }
+         compareAtPrice { amount currencyCode }
+       }`
     : `price
        compareAtPrice`;
 
@@ -99,8 +67,10 @@ function buildSearchQuery(withMarketPricing: boolean): string {
         node {
           id
           title
+          handle
+          onlineStoreUrl
           status
-          description(truncateAt: 600)
+          description(truncateAt: 200)
           productType
           vendor
           tags
@@ -144,6 +114,8 @@ interface RawVariantNode {
 interface RawProductNode {
   id: string;
   title: string;
+  handle: string;
+  onlineStoreUrl: string | null;
   status: string;
   description: string;
   productType: string;
@@ -156,6 +128,28 @@ interface RawProductNode {
     maxVariantPricing: { price: Money } | null;
   } | null;
   variants: { edges: { node: RawVariantNode }[] };
+}
+
+function resolveProductUrl(
+  handle: string,
+  onlineStoreUrl: string | null
+): string | null {
+  const { storefrontUrl } = getShopifyConfig();
+  const slug = handle?.trim();
+  if (storefrontUrl && slug) {
+    return `${storefrontUrl}/products/${slug}`;
+  }
+  if (onlineStoreUrl && /^https?:\/\//i.test(onlineStoreUrl)) {
+    return onlineStoreUrl;
+  }
+  return null;
+}
+
+function withFreshProductUrls(products: ProductSummary[]): ProductSummary[] {
+  return products.map((p) => ({
+    ...p,
+    url: resolveProductUrl(p.handle ?? "", p.url),
+  }));
 }
 
 interface SearchProductsData {
@@ -173,13 +167,16 @@ function toProductSummary(node: RawProductNode): ProductSummary {
     node.contextualPricing?.maxVariantPricing?.price ??
     node.priceRangeV2?.maxVariantPrice;
 
-  // Strip images/URLs and hard-cap description length; the model summarizes it.
-  const description = node.description.replace(/\s+/g, " ").trim().slice(0, 400);
+  const description = node.description.replace(/\s+/g, " ").trim().slice(0, 200);
 
   const variants = node.variants.edges.map(({ node: v }) => {
     const price = v.contextualPricing?.price?.amount ?? v.price ?? "unknown";
+    // Prefer market compare-at when present; otherwise keep the base sale price
+    // so discounts still show for the UK storefront.
     const compareAtPrice =
-      v.contextualPricing?.compareAtPrice?.amount ?? v.compareAtPrice ?? null;
+      v.contextualPricing?.compareAtPrice?.amount ??
+      v.compareAtPrice ??
+      null;
     return {
       id: v.id,
       title: v.title,
@@ -190,9 +187,13 @@ function toProductSummary(node: RawProductNode): ProductSummary {
     };
   });
 
+  const handle = node.handle?.trim() ?? "";
+
   return {
     id: node.id,
     title: node.title,
+    handle,
+    url: resolveProductUrl(handle, node.onlineStoreUrl),
     status: node.status,
     description,
     productType: node.productType,
@@ -209,7 +210,6 @@ function toProductSummary(node: RawProductNode): ProductSummary {
   };
 }
 
-/** A genuine discount requires a compare-at price strictly greater than the price. */
 function isRealDiscount(price: string, compareAtPrice: string | null): boolean {
   if (!compareAtPrice) return false;
   const p = Number.parseFloat(price);
@@ -218,17 +218,14 @@ function isRealDiscount(price: string, compareAtPrice: string | null): boolean {
   return c > p;
 }
 
-/** Combine a free-text keyword with the Online Store visibility scope. */
 function storefrontQuery(keyword?: string): string {
   const k = keyword?.trim();
   if (!k) return STOREFRONT_SCOPE;
   return `${STOREFRONT_SCOPE} AND ${k}`;
 }
 
-/** Drop Admin-only noise that sometimes slips through (duplicate titles). */
 function isStorefrontWorthy(product: ProductSummary): boolean {
   if (product.status && product.status.toUpperCase() !== "ACTIVE") return false;
-  // Shopify duplicates append "(Copy)" — never treat as a customer-facing listing
   if (/\(copy\)/i.test(product.title)) return false;
   return true;
 }
@@ -255,7 +252,6 @@ const STOP_WORDS = new Set([
   "me",
 ]);
 
-/** Build a few search variants so long product titles still hit the catalog. */
 function buildSearchQueries(keyword: string): string[] {
   const sanitized = keyword.replace(/["\\]/g, " ").trim();
   if (!sanitized) return [];
@@ -268,16 +264,14 @@ function buildSearchQueries(keyword: string): string[] {
   const queries: string[] = [sanitized];
 
   if (tokens.length >= 2) {
-    // Distinctive middle terms often match better than the full marketing title
     queries.push(tokens.slice(0, 4).join(" "));
     if (tokens.length > 4) {
       queries.push(tokens.slice(-3).join(" "));
     }
   } else if (tokens.length === 1) {
-    queries.push(tokens[0]);
+    queries.push(tokens[0]!);
   }
 
-  // Deduplicate while preserving order, then wrap each in storefront scope
   return [...new Set(queries.filter(Boolean))].map((q) => storefrontQuery(q));
 }
 
@@ -285,7 +279,8 @@ async function runProductQuery(
   query: string,
   first: number,
   marketCountry: string | null,
-  after: string | null = null
+  after: string | null = null,
+  signal?: AbortSignal
 ): Promise<{
   products: ProductSummary[];
   hasNextPage: boolean;
@@ -294,9 +289,10 @@ async function runProductQuery(
   const variables: Record<string, unknown> = { query, first, after };
   if (marketCountry) variables.country = marketCountry;
 
-  const data = await shopifyGraphql<SearchProductsData>(
+  const data = await shopifyAdminGraphql<SearchProductsData>(
     buildSearchQuery(Boolean(marketCountry)),
-    variables
+    variables,
+    { signal }
   );
 
   const products = data.products.edges
@@ -313,55 +309,56 @@ async function runProductQuery(
 async function searchProductsUncached(
   keyword: string,
   limit: number,
-  marketCountry: string | null
+  marketCountry: string | null,
+  signal?: AbortSignal
 ): Promise<ProductSummary[]> {
   const first = Math.min(Math.max(limit, 1), MAX_RESULTS);
   const queries = buildSearchQueries(keyword);
 
   for (const query of queries) {
-    const { products } = await runProductQuery(query, first, marketCountry);
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    const { products } = await runProductQuery(
+      query,
+      first,
+      marketCountry,
+      null,
+      signal
+    );
     if (products.length > 0) return products;
   }
 
   return [];
 }
 
-/**
- * Search store products by keyword (title, type, vendor, tags).
- * Results use two-layer Redis cache (search→IDs + product-by-id) with coalescing.
- * Only ACTIVE + Online Store published products are returned.
- */
 export async function searchProducts(
   keyword: string,
-  limit = 10
+  limit = 5,
+  options: ShopifyFetchOptions = {}
 ): Promise<ProductSummary[]> {
   const { marketCountry } = getShopifyConfig();
   const results = await cachedProductSearch(keyword, limit, marketCountry, () =>
-    searchProductsUncached(keyword, limit, marketCountry)
+    searchProductsUncached(keyword, limit, marketCountry, options.signal)
   );
-  // Drop stale cache entries that are not storefront-visible / are Admin copies
-  return results.filter(isStorefrontWorthy);
+  return withFreshProductUrls(results.filter(isStorefrontWorthy));
 }
 
-/**
- * Return storefront-visible products that are genuinely on sale
- * (compare-at price exceeds current price). Paginates the published
- * catalog so sale items beyond the first page are not missed.
- */
-export async function getDiscountedProducts(
-  limit = DISCOUNT_RESULT_LIMIT
+async function getDiscountedProductsUncached(
+  limit: number,
+  marketCountry: string | null,
+  signal?: AbortSignal
 ): Promise<ProductSummary[]> {
-  const { marketCountry } = getShopifyConfig();
   const capped = Math.min(Math.max(limit, 1), DISCOUNT_RESULT_LIMIT);
   const onSale: ProductSummary[] = [];
   let after: string | null = null;
 
   for (let page = 0; page < DISCOUNT_MAX_PAGES; page++) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     const { products, hasNextPage, endCursor } = await runProductQuery(
       storefrontQuery(),
       DISCOUNT_PAGE_SIZE,
       marketCountry,
-      after
+      after,
+      signal
     );
 
     for (const p of products) {
@@ -373,5 +370,660 @@ export async function getDiscountedProducts(
     after = endCursor;
   }
 
-  return onSale;
+  return withFreshProductUrls(onSale);
+}
+
+export async function getDiscountedProducts(
+  limit = DISCOUNT_RESULT_LIMIT,
+  options: ShopifyFetchOptions = {}
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
+  const capped = Math.min(Math.max(limit, 1), DISCOUNT_RESULT_LIMIT);
+  const results = await cachedDiscountedProducts(capped, marketCountry, () =>
+    getDiscountedProductsUncached(capped, marketCountry, options.signal)
+  );
+  return withFreshProductUrls(results.filter(isStorefrontWorthy));
+}
+
+interface ProductsCountData {
+  productsCount: { count: number; precision: string } | null;
+}
+
+/**
+ * Exact count of ACTIVE products published on the Online Store
+ * (same scope as catalog search). Not capped at search page size.
+ */
+export async function countStorefrontProducts(
+  options: ShopifyFetchOptions = {}
+): Promise<{ count: number; precision: string }> {
+  const data = await shopifyAdminGraphql<ProductsCountData>(
+    `query CountStorefrontProducts($query: String!, $limit: Int) {
+      productsCount(query: $query, limit: $limit) {
+        count
+        precision
+      }
+    }`,
+    { query: STOREFRONT_SCOPE, limit: null },
+    { signal: options.signal }
+  );
+
+  const count = data.productsCount?.count;
+  if (typeof count !== "number" || !Number.isFinite(count) || count < 0) {
+    throw new Error("Shopify productsCount returned an invalid count");
+  }
+
+  return {
+    count,
+    precision: data.productsCount?.precision ?? "EXACT",
+  };
+}
+
+export interface CategoryCollectionMatch {
+  id: string;
+  title: string;
+  handle: string;
+  productsCount: number;
+  precision: string;
+}
+
+export interface CategoryLookupResult {
+  category: string;
+  matched: CategoryCollectionMatch | null;
+  /** Exact Shopify productType when that path won (e.g. "Boxing Gloves"). */
+  productType: string | null;
+  source: "product_type" | "collection" | "product_filter" | "none";
+  totalProducts: number;
+  precision: string;
+  /** Sample products — only populated for list mode. */
+  products: ProductSummary[];
+  mode: "count" | "list";
+}
+
+interface CollectionSearchData {
+  collections: {
+    edges: {
+      node: {
+        id: string;
+        title: string;
+        handle: string;
+        productsCount: { count: number; precision: string } | null;
+      };
+    }[];
+  };
+}
+
+function slugifyCategory(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function scoreCollectionMatch(
+  category: string,
+  title: string,
+  handle: string
+): number {
+  const c = category.trim().toLowerCase();
+  const t = title.trim().toLowerCase();
+  const h = handle.trim().toLowerCase();
+  const slug = slugifyCategory(category);
+
+  // Prefer exact handle — titles can collide (e.g. multiple "Boxing Gloves").
+  if (h === slug) return 100;
+  if (t === c) return 95;
+  if (h.includes(slug) && slug.length >= 4) return 80;
+  if (t.includes(c) && c.length >= 4) return 75;
+  if (slug && (h.startsWith(slug) || t.startsWith(c))) return 70;
+  return 0;
+}
+
+function collectionNumericId(gid: string): string | null {
+  const num = gid.split("/").pop();
+  return num && /^\d+$/.test(num) ? num : null;
+}
+
+/**
+ * Storefront-facing collection size: ACTIVE + published on Online Store.
+ * Matches the "47 PRODUCTS" count on collection pages (not Admin's raw total).
+ */
+async function countPublishedCollectionProducts(
+  collectionGid: string,
+  options: ShopifyFetchOptions = {}
+): Promise<{ count: number; precision: string } | null> {
+  const num = collectionNumericId(collectionGid);
+  if (!num) return null;
+
+  const data = await shopifyAdminGraphql<ProductsCountData>(
+    `query CountPublishedInCollection($query: String!, $limit: Int) {
+      productsCount(query: $query, limit: $limit) {
+        count
+        precision
+      }
+    }`,
+    {
+      query: `collection_id:${num} AND status:ACTIVE published_status:published`,
+      limit: null,
+    },
+    { signal: options.signal }
+  );
+
+  const count = data.productsCount?.count;
+  if (typeof count !== "number" || !Number.isFinite(count) || count < 0) {
+    return null;
+  }
+
+  return {
+    count,
+    precision: data.productsCount?.precision ?? "EXACT",
+  };
+}
+
+/**
+ * Find the best Shopify collection for a category name (e.g. "yoga", "boxing gloves").
+ */
+export async function findCategoryCollection(
+  category: string,
+  options: ShopifyFetchOptions = {}
+): Promise<CategoryCollectionMatch | null> {
+  const raw = category.trim();
+  if (!raw) return null;
+
+  const slug = slugifyCategory(raw);
+  // Handle + quoted title first so we land on boxing-gloves (47), not sale aliases.
+  const queries = [
+    `handle:${slug}`,
+    `title:"${raw.replace(/"/g, "")}"`,
+    `title:${raw}`,
+    `title:*${raw}*`,
+    slug.includes("-") ? `title:*${slug.replace(/-/g, " ")}*` : null,
+  ].filter(Boolean) as string[];
+
+  let best: {
+    id: string;
+    title: string;
+    handle: string;
+    fallbackCount: number;
+    fallbackPrecision: string;
+  } | null = null;
+  let bestScore = 0;
+
+  for (const query of queries) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    const data = await shopifyAdminGraphql<CollectionSearchData>(
+      `query FindCollections($query: String!, $first: Int!) {
+        collections(first: $first, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+              productsCount {
+                count
+                precision
+              }
+            }
+          }
+        }
+      }`,
+      { query, first: 20 },
+      { signal: options.signal }
+    );
+
+    for (const { node } of data.collections.edges) {
+      const score = scoreCollectionMatch(raw, node.title, node.handle);
+      if (score < 70 || score < bestScore) continue;
+      const count = node.productsCount?.count;
+      if (typeof count !== "number" || !Number.isFinite(count)) continue;
+
+      bestScore = score;
+      best = {
+        id: node.id,
+        title: node.title,
+        handle: node.handle,
+        fallbackCount: count,
+        fallbackPrecision: node.productsCount?.precision ?? "EXACT",
+      };
+      if (score >= 100) break;
+    }
+    if (bestScore >= 100) break;
+  }
+
+  if (!best || bestScore < 70) return null;
+
+  // Storefront count (ACTIVE + published) — e.g. 47 for Boxing Gloves, not Admin 50.
+  const published = await countPublishedCollectionProducts(best.id, options);
+  return {
+    id: best.id,
+    title: best.title,
+    handle: best.handle,
+    productsCount: published?.count ?? best.fallbackCount,
+    precision: published?.precision ?? best.fallbackPrecision,
+  };
+}
+
+/** Title-Case for Shopify productType values (e.g. boxing gloves → Boxing Gloves). */
+function toProductTypeLabel(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+/** Singular/plural variants so "belts" still matches productType "Belt". */
+function productTypeCandidates(category: string): string[] {
+  const term = category.trim().replace(/["\\]/g, "").replace(/\s+/g, " ");
+  if (!term) return [];
+
+  const lower = term.toLowerCase();
+  const variants = new Set<string>([term, lower, toProductTypeLabel(term)]);
+
+  const words = lower.split(" ");
+  const last = words[words.length - 1] ?? "";
+  if (last.endsWith("ies") && last.length > 4) {
+    const singular = `${last.slice(0, -3)}y`;
+    const next = [...words.slice(0, -1), singular].join(" ");
+    variants.add(next);
+    variants.add(toProductTypeLabel(next));
+  } else if (last.endsWith("ses") && last.length > 4) {
+    const singular = last.slice(0, -2);
+    const next = [...words.slice(0, -1), singular].join(" ");
+    variants.add(next);
+    variants.add(toProductTypeLabel(next));
+  } else if (last.endsWith("s") && last.length > 2 && !last.endsWith("ss")) {
+    const singular = last.slice(0, -1);
+    const next = [...words.slice(0, -1), singular].join(" ");
+    variants.add(next);
+    variants.add(toProductTypeLabel(next));
+  } else {
+    const plural = `${last}s`;
+    const next = [...words.slice(0, -1), plural].join(" ");
+    variants.add(next);
+    variants.add(toProductTypeLabel(next));
+  }
+
+  return [...variants].filter(Boolean);
+}
+
+/**
+ * Exact count by Shopify productType (e.g. productType: "Boxing Gloves").
+ * Uses quoted product_type so multi-word types match correctly.
+ */
+export async function countByProductType(
+  category: string,
+  options: ShopifyFetchOptions = {}
+): Promise<{ count: number; precision: string; productType: string } | null> {
+  const candidates = productTypeCandidates(category);
+  if (candidates.length === 0) return null;
+
+  for (const productType of candidates) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    const data = await shopifyAdminGraphql<ProductsCountData>(
+      `query CountByProductType($query: String!, $limit: Int) {
+        productsCount(query: $query, limit: $limit) {
+          count
+          precision
+        }
+      }`,
+      {
+        query: `${STOREFRONT_SCOPE} AND product_type:"${productType}"`,
+        limit: null,
+      },
+      { signal: options.signal }
+    );
+
+    const count = data.productsCount?.count;
+    if (typeof count === "number" && Number.isFinite(count) && count > 0) {
+      return {
+        count,
+        precision: data.productsCount?.precision ?? "EXACT",
+        productType,
+      };
+    }
+  }
+
+  return null;
+}
+
+function isProductInStock(product: ProductSummary): boolean {
+  if (product.variants.some((v) => v.availableForSale)) return true;
+  if (typeof product.totalInventory === "number" && product.totalInventory > 0) {
+    return true;
+  }
+  return product.variants.some(
+    (v) => typeof v.inventoryQuantity === "number" && v.inventoryQuantity > 0
+  );
+}
+
+async function listByProductType(
+  productType: string,
+  limit: number,
+  options: ShopifyFetchOptions = {}
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
+  const capped = Math.min(Math.max(limit, 1), MAX_RESULTS);
+  const typeClause = `product_type:"${productType.replace(/"/g, "")}"`;
+  // Prefer inventory filter server-side when asking for in-stock only.
+  const stockClause = options.inStockOnly ? " inventory_total:>0" : "";
+  const query = storefrontQuery(`${typeClause}${stockClause}`);
+
+  const collected: ProductSummary[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 4 && collected.length < capped; page++) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    const { products, hasNextPage, endCursor } = await runProductQuery(
+      query,
+      Math.min(MAX_RESULTS, Math.max(capped, 25)),
+      marketCountry,
+      after,
+      options.signal
+    );
+    for (const p of products) {
+      if (options.inStockOnly && !isProductInStock(p)) continue;
+      collected.push(p);
+      if (collected.length >= capped) break;
+    }
+    if (!hasNextPage || !endCursor) break;
+    after = endCursor;
+  }
+
+  return withFreshProductUrls(collected);
+}
+
+async function countProductsByFilter(
+  category: string,
+  options: ShopifyFetchOptions = {}
+): Promise<{ count: number; precision: string }> {
+  const term = category.trim().replace(/["\\]/g, " ");
+  const slug = slugifyCategory(term);
+  const typeLabel = toProductTypeLabel(term);
+  // Prefer exact product_type / tags — avoid loose title* OR that over-counts.
+  const filter = [
+    `product_type:"${typeLabel}"`,
+    `product_type:"${term}"`,
+    `tag:"${term}"`,
+    slug ? `tag:${slug}` : null,
+  ]
+    .filter(Boolean)
+    .join(" OR ");
+
+  const data = await shopifyAdminGraphql<ProductsCountData>(
+    `query CountCategoryProducts($query: String!, $limit: Int) {
+      productsCount(query: $query, limit: $limit) {
+        count
+        precision
+      }
+    }`,
+    {
+      query: `${STOREFRONT_SCOPE} AND (${filter})`,
+      limit: null,
+    },
+    { signal: options.signal }
+  );
+
+  const count = data.productsCount?.count;
+  if (typeof count !== "number" || !Number.isFinite(count) || count < 0) {
+    throw new Error("Shopify productsCount returned an invalid category count");
+  }
+
+  return {
+    count,
+    precision: data.productsCount?.precision ?? "EXACT",
+  };
+}
+
+const CATEGORY_LIST_LIMIT = 12;
+
+/**
+ * Look up a store category: exact productType, then collection, then tag filters.
+ * productType (e.g. "Boxing Gloves") is checked explicitly — not only collections.
+ */
+export async function lookupCategory(
+  category: string,
+  mode: "count" | "list" = "count",
+  options: ShopifyFetchOptions = {}
+): Promise<CategoryLookupResult> {
+  const cleaned = category.trim();
+  const inStockOnly = Boolean(options.inStockOnly);
+  if (!cleaned) {
+    return {
+      category: "",
+      matched: null,
+      productType: null,
+      source: "none",
+      totalProducts: 0,
+      precision: "EXACT",
+      products: [],
+      mode,
+    };
+  }
+
+  const [byType, matched] = await Promise.all([
+    countByProductType(cleaned, options),
+    findCategoryCollection(cleaned, options),
+  ]);
+
+  // Prefer exact productType when present — matches Shopify product.productType.
+  if (byType) {
+    let products: ProductSummary[] = [];
+    if (mode === "list") {
+      products = await listByProductType(byType.productType, CATEGORY_LIST_LIMIT, {
+        ...options,
+        inStockOnly,
+      });
+      // Fallback if listing fails but count succeeded (same productType).
+      if (products.length === 0 && matched) {
+        products = await listCollectionProducts(matched.id, CATEGORY_LIST_LIMIT, {
+          ...options,
+          inStockOnly,
+        });
+      }
+      // In-stock filter can over-filter — retry without server inventory clause.
+      if (products.length === 0 && inStockOnly) {
+        const unfiltered = await listByProductType(
+          byType.productType,
+          CATEGORY_LIST_LIMIT,
+          { ...options, inStockOnly: false }
+        );
+        products = unfiltered.filter(isProductInStock);
+        if (products.length === 0 && matched) {
+          const fromCollection = await listCollectionProducts(
+            matched.id,
+            CATEGORY_LIST_LIMIT,
+            { ...options, inStockOnly: false }
+          );
+          products = fromCollection.filter(isProductInStock);
+        }
+      }
+      if (products.length === 0 && !inStockOnly) {
+        products = await searchProducts(cleaned, CATEGORY_LIST_LIMIT, options);
+      }
+    }
+    return {
+      category: cleaned,
+      matched,
+      productType: byType.productType,
+      source: "product_type",
+      totalProducts: byType.count,
+      precision: byType.precision,
+      products,
+      mode,
+    };
+  }
+
+  if (matched) {
+    let products: ProductSummary[] = [];
+    if (mode === "list") {
+      products = await listCollectionProducts(matched.id, CATEGORY_LIST_LIMIT, {
+        ...options,
+        inStockOnly,
+      });
+    }
+    return {
+      category: cleaned,
+      matched,
+      productType: null,
+      source: "collection",
+      totalProducts: matched.productsCount,
+      precision: matched.precision,
+      products,
+      mode,
+    };
+  }
+
+  const filtered = await countProductsByFilter(cleaned, options);
+  let products: ProductSummary[] = [];
+  if (mode === "list" && filtered.count > 0) {
+    const typeLabel = toProductTypeLabel(cleaned);
+    products = await listByProductType(typeLabel, CATEGORY_LIST_LIMIT, {
+      ...options,
+      inStockOnly,
+    });
+    if (products.length === 0 && !inStockOnly) {
+      products = await searchProducts(cleaned, CATEGORY_LIST_LIMIT, options);
+    }
+  }
+
+  return {
+    category: cleaned,
+    matched: null,
+    productType: null,
+    source: filtered.count > 0 ? "product_filter" : "none",
+    totalProducts: filtered.count,
+    precision: filtered.precision,
+    products,
+    mode,
+  };
+}
+
+interface CollectionProductsData {
+  collection: {
+    id: string;
+    products: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      edges: { node: RawProductNode }[];
+    };
+  } | null;
+}
+
+async function listCollectionProducts(
+  collectionId: string,
+  limit: number,
+  options: ShopifyFetchOptions = {}
+): Promise<ProductSummary[]> {
+  const { marketCountry } = getShopifyConfig();
+  const capped = Math.min(Math.max(limit, 1), MAX_RESULTS);
+  const withMarket = Boolean(marketCountry);
+
+  const productPricing = withMarket
+    ? `contextualPricing(context: { country: $country }) {
+        minVariantPricing { price { amount currencyCode } }
+        maxVariantPricing { price { amount currencyCode } }
+      }`
+    : `priceRangeV2 {
+        minVariantPrice { amount currencyCode }
+        maxVariantPrice { amount currencyCode }
+      }`;
+
+  const variantPricing = withMarket
+    ? `price
+       compareAtPrice
+       contextualPricing(context: { country: $country }) {
+         price { amount currencyCode }
+         compareAtPrice { amount currencyCode }
+       }`
+    : `price
+       compareAtPrice`;
+
+  const vars = withMarket
+    ? `$id: ID!, $first: Int!, $after: String, $country: CountryCode!`
+    : `$id: ID!, $first: Int!, $after: String`;
+
+  const query = `
+    query CollectionProducts(${vars}) {
+      collection(id: $id) {
+        id
+        products(first: $first, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          edges {
+            node {
+              id
+              title
+              handle
+              onlineStoreUrl
+              status
+              description(truncateAt: 200)
+              productType
+              vendor
+              tags
+              totalInventory
+              ${productPricing}
+              variants(first: ${MAX_RESULTS}) {
+                edges {
+                  node {
+                    id
+                    title
+                    availableForSale
+                    inventoryQuantity
+                    ${variantPricing}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }`;
+
+  const collected: ProductSummary[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 4 && collected.length < capped; page++) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    const variables: Record<string, unknown> = {
+      id: collectionId,
+      first: Math.min(MAX_RESULTS, Math.max(capped, 25)),
+      after,
+    };
+    if (marketCountry) variables.country = marketCountry;
+
+    const data = await shopifyAdminGraphql<CollectionProductsData>(
+      query,
+      variables,
+      { signal: options.signal }
+    );
+
+    const connection = data.collection?.products;
+    const pageProducts = (connection?.edges ?? [])
+      .map((e) => toProductSummary(e.node))
+      .filter(isStorefrontWorthy);
+
+    for (const p of pageProducts) {
+      if (options.inStockOnly && !isProductInStock(p)) continue;
+      collected.push(p);
+      if (collected.length >= capped) break;
+    }
+
+    if (!connection?.pageInfo.hasNextPage || !connection.pageInfo.endCursor) {
+      break;
+    }
+    after = connection.pageInfo.endCursor;
+  }
+
+  return withFreshProductUrls(collected);
 }

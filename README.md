@@ -1,47 +1,43 @@
-# Shopify AI Chatbot (Next.js + n8n)
+# Shopify AI Chatbot (Next.js)
 
-Production-ready AI customer support chatbot for a Shopify store.
+Production-oriented AI customer support chatbot for a Shopify store.
 
-- **Conversational AI lives inside Next.js** — the `/api/chat` route runs an OpenAI tool-calling agent that queries the Shopify Admin API for live product data.
-- **n8n is reserved for automation workflows** — order tracking, refunds/returns, and complaint handling will be wired to n8n workflows later. Those menu options currently show "unavailable".
+- **Conversational AI lives inside Next.js** — `/api/chat` runs an OpenAI tool-calling agent against the Shopify Admin API.
+- **n8n is reserved for future automation** — refunds/returns and complaint handling.
 
 ## Features
 
-- Floating chat widget with a welcome message and quick-option buttons:
-  - Track Your Order *(coming soon)*
-  - **Product Information** *(live)*
-  - Place an Order *(coming soon)*
-  - Refunds & Returns *(coming soon)*
-  - Report a Damaged Product *(coming soon)*
-- Live product answers (prices, sizes, variants, stock) pulled from your Shopify catalog — the AI never invents product facts.
-- **Market-aware pricing** — set `SHOPIFY_MARKET_COUNTRY` and the assistant quotes the exact prices customers see on your storefront.
-- Strictly scoped: refuses off-topic questions and redirects to store topics.
-- Production hardening: per-IP rate limiting, request validation, API timeouts, env validation with clear errors, and session-persistent chat history.
+- Floating chat widget (home + `/embed`) with quick options
+- Live product search (prices, variants, stock, storefront links)
+- Order tracking with **order number + checkout email** ownership check
+- Market-aware pricing via `SHOPIFY_MARKET_COUNTRY`
+- Redis-backed product cache, chat sessions, and rate limits
+- SSE streaming replies (`?stream=1`) with JSON fallback
+- Health probe at `GET /api/health`
 
 ## Setup
 
-### 1. Install dependencies
+### 1. Install
 
 ```bash
 npm install
 ```
 
-### 2. Add credentials
+### 2. Environment
 
-Copy `.env.example` to `.env.local` and fill in:
+Copy [`.env.example`](.env.example) to `.env.local` and fill in values.
 
-| Variable | Required | Where to get it |
-|----------|----------|----------------|
-| `OPENAI_API_KEY` | Yes | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| `OPENAI_MODEL` | No | Defaults to `gpt-4o-mini` |
-| `SHOPIFY_STORE_DOMAIN` | Yes | Your `*.myshopify.com` domain, without `https://` |
-| `SHOPIFY_ADMIN_ACCESS_TOKEN` | Yes | Shopify admin → Settings → Apps and sales channels → **Develop apps** → create an app → enable the `read_products` Admin API scope → install → reveal the `shpat_...` token |
-| `SHOPIFY_MARKET_COUNTRY` | No | 2-letter country code of your storefront market (e.g. `DE`). Ensures quoted prices match the storefront exactly |
-| `NEXT_PUBLIC_STORE_NAME` | No | Your store's display name in the widget |
-| `REDIS_URL` | **Production: Yes** | Redis connection URL (`redis://` or `rediss://`). Local/dev works without it (in-memory fallback). |
-| `REDIS_KEY_PREFIX` | No | Key namespace (default `n8napp`) |
-| `PRODUCT_CACHE_TTL_SECONDS` | No | Product-by-id + search→id cache TTL (default `1800` = 30 min) |
-| `PRODUCT_CACHE_EMPTY_TTL_SECONDS` | No | Empty-result cache TTL (default `20`) |
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `OPENAI_MODEL` | No | Default `gpt-4o-mini` |
+| `SHOPIFY_STORE_DOMAIN` | Yes | `*.myshopify.com` (no protocol) |
+| `SHOPIFY_ADMIN_ACCESS_TOKEN` | Yes | Needs `read_products` + `read_orders` |
+| `SHOPIFY_MARKET_COUNTRY` | No | ISO-2 market code |
+| `SHOPIFY_STOREFRONT_URL` | No | Origin for product links |
+| `REDIS_URL` | Production: Yes | `redis://` or `rediss://` |
+| `NEXT_PUBLIC_STORE_NAME` | No | Widget display name |
+| `NEXT_PUBLIC_STOREFRONT_HOST` | No | Hostname allowlist for chat links |
 
 ### 3. Run
 
@@ -49,50 +45,77 @@ Copy `.env.example` to `.env.local` and fill in:
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and click the chat bubble.
+Open [http://localhost:4000](http://localhost:4000).
+
+### 4. Verify
+
+```bash
+npm run lint
+npm test
+npm run build
+```
 
 ## Architecture
 
 ```
-app/
-  api/chat/route.ts    # HTTP layer: validation, rate limiting, error mapping
-  page.tsx             # Demo page hosting the widget
-components/
-  ChatWidget.tsx       # Floating chat widget (welcome, options, history persistence)
-  MessageContent.tsx   # Markdown renderer for assistant replies
-lib/
-  chat-agent.ts        # OpenAI tool-calling agent loop
-  shopify.ts           # Shopify Admin GraphQL client (market-aware pricing, timeouts)
-  product-cache.ts     # Redis two-layer cache (search→IDs + product-by-id) + coalescing
-  redis.ts             # Shared ioredis singleton (redis:// / rediss://)
-  system-prompt.ts     # Assistant rules: scope, tool usage, formatting
-  config.ts            # Env validation (fails fast with clear messages)
-  rate-limit.ts        # Sliding-window rate limiter (Redis in prod, memory fallback)
-  sanitize.ts          # Strips image markdown / CDN URLs from replies
-  types.ts             # Shared request/response types
+app/api/chat/                 # Chat + order-tracking HTTP
+app/api/health/               # Readiness probe
+components/chat/              # Widget + markdown
+features/                     # Feature barrels (chat, catalog, order-tracking)
+shared/                       # Infra barrel
+lib/chat/                     # Session + SSE
+lib/shopify/                  # Shared Admin GraphQL client
+services/shopify/             # Credentials + order GraphQL
 ```
 
 ### Request flow
 
-1. Widget POSTs the conversation to `/api/chat`.
-2. The route validates the payload and applies a per-IP rate limit (20 req/min) via Redis when `REDIS_URL` is set.
-3. `runChatAgent` runs the OpenAI loop; when the model calls `search_products`, results are served from Redis cache on hit, otherwise Shopify is queried (with request coalescing under load).
-4. The reply is sanitized (no image markdown or CDN URLs) and rendered as markdown in the widget.
+1. Widget POSTs `{ message }` to `/api/chat?stream=1` (SSE) or JSON.
+2. Server session cookie stores history + conversation state (not client-authored assistant turns).
+3. Rate limit buckets: `chat` (20/min) and `order` (8/min).
+4. Agent tools call cached Shopify catalog / ownership-checked order lookup.
+5. Reply is media-stripped and sanitized on render (`rehype-sanitize`).
 
-### Scaling notes
+### Production notes
 
-- **Redis is required for multi-instance / high-volume production.** Set `REDIS_URL` to a managed Redis (Redis Cloud, Upstash with Redis protocol, ElastiCache, etc.). Without it, rate limiting and product caching fall back to in-memory (single process only).
-- Product search cache uses a short TTL (default 60s) so prices/stock stay reasonably fresh while cutting Shopify Admin API load under chat spikes.
-- Concurrent identical catalog lookups are coalesced (in-process + Redis lock) to prevent stampedes.
-- Chat history lives in the browser (`sessionStorage`) and is replayed with each request, so the API is stateless and scales horizontally.
+- Put the app behind a reverse proxy that sets `X-Real-IP` (or trusted `X-Forwarded-For`).
+- Redis is required for multi-instance rate limits, sessions, and product cache. When Redis is configured but down in production, rate limiting **fail-closes**.
+- Order tracking never returns shipment details without a matching checkout email; miss and mismatch share the same generic message.
+- Full-catalog order scans are disabled (cheap Admin search only).
 
-## Roadmap (n8n automation)
+## Order tracking API
 
-The disabled menu options will each trigger an n8n workflow via webhook:
+`POST /api/chat/order-tracking`
 
-- **Track Your Order** — order lookup + carrier tracking
-- **Place an Order** — draft order creation
-- **Refunds & Returns** — return request intake + approval flow
-- **Report a Damaged Product** — complaint ticket with photo upload
+```json
+{
+  "orderNumber": "#1001",
+  "email": "customer@example.com",
+  "region": "default"
+}
+```
 
-Set `N8N_WEBHOOK_URL` in `.env.local` when those workflows are ready.
+## Chat API
+
+JSON (backward compatible):
+
+```json
+POST /api/chat
+{ "message": "Do you have boxing gloves?" }
+→ { "reply": "...", "requestId": "..." }
+```
+
+Streaming:
+
+```http
+POST /api/chat?stream=1
+Accept: text/event-stream
+```
+
+SSE events: `{ type: "delta", text }`, `{ type: "done", reply, requestId }`, `{ type: "error", error }`.
+
+Legacy `{ "messages": [...] }` is accepted but **only the last user message** is used; assistant roles from the client are ignored.
+
+## Roadmap (n8n)
+
+Disabled menu options will call n8n webhooks when ready (`N8N_WEBHOOK_URL`).

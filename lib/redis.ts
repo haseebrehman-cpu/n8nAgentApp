@@ -167,6 +167,13 @@ export async function getRedis(): Promise<Redis | null> {
       `connect/PING failed (${redactRedisUrl(url)}) — rate limit & product cache will NOT use Redis`,
       err instanceof Error ? err.message : String(err)
     );
+    try {
+      client.disconnect(false);
+    } catch {
+      // ignore
+    }
+    globalForRedis.__n8nappRedis = null;
+    globalForRedis.__n8nappRedisReady = false;
     return null;
   }
 }

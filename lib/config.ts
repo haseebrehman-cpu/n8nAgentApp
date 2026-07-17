@@ -20,6 +20,12 @@ export interface ShopifyConfig {
   accessToken: string;
   /** ISO 3166-1 alpha-2 country code for market-specific pricing (e.g. "DE"). */
   marketCountry: string | null;
+  /**
+   * Public storefront origin used to build product page URLs
+   * (e.g. "https://www.example.com"). Null when unset — falls back to
+   * Shopify's onlineStoreUrl when available.
+   */
+  storefrontUrl: string | null;
 }
 
 export interface RedisConfig {
@@ -68,8 +74,46 @@ export function getShopifyConfig(): ShopifyConfig {
       `SHOPIFY_MARKET_COUNTRY must be a 2-letter ISO country code (got "${rawCountry}").`
     );
   }
+  // Shopify CountryCode uses GB, not UK.
+  const marketCountry =
+    rawCountry === "UK" ? "GB" : rawCountry;
 
-  return { domain, accessToken, marketCountry: rawCountry };
+  const storefrontUrl = parseStorefrontUrl(process.env.SHOPIFY_STOREFRONT_URL);
+
+  return { domain, accessToken, marketCountry, storefrontUrl };
+}
+
+/** Validate and normalize a public storefront origin (no trailing slash). */
+function parseStorefrontUrl(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+
+  // Allow bare hostnames (common mistake) by assuming https.
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(withProtocol);
+  } catch {
+    throw new ConfigError(
+      `SHOPIFY_STOREFRONT_URL must be a valid absolute URL (got "${value}"). Example: https://www.example.com`
+    );
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new ConfigError(
+      `SHOPIFY_STOREFRONT_URL must use http or https (got "${value}").`
+    );
+  }
+
+  if (!parsed.hostname) {
+    throw new ConfigError(
+      `SHOPIFY_STOREFRONT_URL is missing a hostname (got "${value}").`
+    );
+  }
+
+  // Origin only — path/query/hash are ignored so /products/{handle} is predictable.
+  return parsed.origin;
 }
 
 let warnedMissingRedis = false;

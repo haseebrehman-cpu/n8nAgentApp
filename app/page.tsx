@@ -1,4 +1,4 @@
-import ChatWidget from "@/components/ChatWidget";
+import ChatWidgetLoader from "@/components/chat/ChatWidgetLoader";
 
 const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Our Store";
 
@@ -16,7 +16,7 @@ export default function Home() {
         Click the chat bubble in the bottom-right corner to get instant answers
         about prices, sizes, and availability.
       </p>
-      <ChatWidget />
+      <ChatWidgetLoader />
     </main>
   );
 }

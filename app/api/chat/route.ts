@@ -1,77 +1,244 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runChatAgent } from "@/lib/chat-agent";
+import {
+  appendUserMessage,
+  getOrCreateSession,
+  getSessionCookieName,
+  MAX_MESSAGE_CHARS,
+  newRequestId,
+  saveSession,
+  sessionCookieOptions,
+  shortSessionId,
+} from "@/lib/chat/session";
+import {
+  chunkText,
+  createSseResponse,
+  encodeSse,
+} from "@/lib/chat/sse";
 import { isConfigError } from "@/lib/config";
+import { getClientIp } from "@/lib/http/client-ip";
+import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
-import type { ChatMessagePayload } from "@/lib/types";
+import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
 
 export const runtime = "nodejs";
 
-const MAX_HISTORY_MESSAGES = 30;
-const MAX_MESSAGE_CHARS = 4_000;
+const VALID_REGIONS = new Set<ShopifyStoreRegion>([
+  "default",
+  "fr",
+  "de",
+  "es",
+  "uk",
+]);
 
-function sanitizeHistory(raw: unknown): ChatMessagePayload[] | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-
-  const messages: ChatMessagePayload[] = [];
-  for (const item of raw.slice(-MAX_HISTORY_MESSAGES)) {
-    if (typeof item !== "object" || item === null) return null;
-    const { role, content } = item as { role?: unknown; content?: unknown };
-    if ((role !== "user" && role !== "assistant") || typeof content !== "string") {
-      return null;
-    }
-    messages.push({ role, content: content.slice(0, MAX_MESSAGE_CHARS) });
-  }
-
-  if (messages[messages.length - 1]?.role !== "user") return null;
-  return messages;
+function parseRegion(raw: unknown): ShopifyStoreRegion {
+  if (typeof raw !== "string") return "default";
+  const region = raw.trim().toLowerCase() as ShopifyStoreRegion;
+  return VALID_REGIONS.has(region) ? region : "default";
 }
 
-function clientKey(req: NextRequest): string {
-  return (
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip") ||
-    "unknown"
-  );
+function wantsStream(req: NextRequest, body: unknown): boolean {
+  if (req.nextUrl.searchParams.get("stream") === "1") return true;
+  const accept = req.headers.get("accept") ?? "";
+  if (accept.includes("text/event-stream")) return true;
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    (body as { stream?: unknown }).stream === true
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Accept either `{ message }` (preferred) or legacy `{ messages }` (user turns only).
+ */
+function extractUserMessage(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const obj = body as { message?: unknown; messages?: unknown };
+
+  if (typeof obj.message === "string") {
+    const trimmed = obj.message.trim();
+    if (!trimmed || trimmed.length > MAX_MESSAGE_CHARS) return null;
+    return trimmed.slice(0, MAX_MESSAGE_CHARS);
+  }
+
+  if (Array.isArray(obj.messages) && obj.messages.length > 0) {
+    for (let i = obj.messages.length - 1; i >= 0; i--) {
+      const item = obj.messages[i];
+      if (
+        typeof item === "object" &&
+        item !== null &&
+        (item as { role?: unknown }).role === "user" &&
+        typeof (item as { content?: unknown }).content === "string"
+      ) {
+        const content = ((item as { content: string }).content ?? "").trim();
+        if (!content) return null;
+        return content.slice(0, MAX_MESSAGE_CHARS);
+      }
+    }
+  }
+
+  return null;
+}
+
+function withSessionCookie(
+  res: NextResponse,
+  sessionId: string
+): NextResponse {
+  res.cookies.set(getSessionCookieName(), sessionId, sessionCookieOptions());
+  return res;
 }
 
 export async function POST(req: NextRequest) {
-  // Visible proof this Next.js process handled the chat request.
-  console.log("[api/chat] POST received");
+  const requestId = newRequestId();
 
-  const rate = await checkRateLimit(clientKey(req));
+  const rate = await checkRateLimit(getClientIp(req), { bucket: "chat" });
   if (!rate.allowed) {
     return NextResponse.json(
-      { error: "Too many messages. Please wait a moment and try again." },
-      { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } }
+      {
+        error: rate.failClosed
+          ? "The assistant is temporarily unavailable. Please try again shortly."
+          : "Too many messages. Please wait a moment and try again.",
+      },
+      {
+        status: rate.failClosed ? 503 : 429,
+        headers: { "Retry-After": String(rate.retryAfterSeconds) },
+      }
     );
   }
 
-  let history: ChatMessagePayload[] | null = null;
+  let body: unknown;
   try {
-    const body = await req.json();
-    history = sanitizeHistory(body?.messages);
+    body = await req.json();
   } catch {
-    history = null;
+    body = null;
   }
-  if (!history) {
+
+  const userMessage = extractUserMessage(body);
+  if (!userMessage) {
     return NextResponse.json(
-      { error: "Request body must be { messages: [{ role, content }, ...] } ending with a user message." },
+      {
+        error:
+          'Request body must be { "message": "..." } (or legacy { "messages": [...] } ending with a user message).',
+      },
       { status: 400 }
     );
   }
 
+  const region = parseRegion(
+    typeof body === "object" && body !== null
+      ? (body as { region?: unknown }).region
+      : undefined
+  );
+  const stream = wantsStream(req, body);
+
+  const cookieName = getSessionCookieName();
+  const { session, isNew } = await getOrCreateSession(
+    req.cookies.get(cookieName)?.value
+  );
+
+  appendUserMessage(session, userMessage);
+
+  logger.info("api/chat", "request", {
+    requestId,
+    session: shortSessionId(session.id),
+    isNew,
+    state: session.state,
+    stream,
+  });
+
+  if (stream) {
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          const reply = await runChatAgent(session.messages, {
+            session,
+            signal: req.signal,
+            region,
+            requestId,
+          });
+          await saveSession(session);
+
+          for (const part of chunkText(reply)) {
+            if (req.signal.aborted) break;
+            controller.enqueue(encoder.encode(encodeSse({ type: "delta", text: part })));
+          }
+          controller.enqueue(
+            encoder.encode(encodeSse({ type: "done", reply, requestId }))
+          );
+        } catch (err) {
+          await saveSession(session);
+          const message = isConfigError(err)
+            ? "The assistant is not fully configured yet. Please try again later."
+            : err instanceof Error &&
+                (err.name === "AbortError" || /aborted/i.test(err.message))
+              ? "Request cancelled."
+              : "The assistant is temporarily unavailable. Please try again shortly.";
+          logger.error("api/chat", "stream failed", {
+            requestId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          controller.enqueue(
+            encoder.encode(encodeSse({ type: "error", error: message }))
+          );
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    const res = createSseResponse(readable);
+    // Attach session cookie via NextResponse wrapper
+    const nextRes = new NextResponse(res.body, {
+      status: 200,
+      headers: res.headers,
+    });
+    nextRes.cookies.set(cookieName, session.id, sessionCookieOptions());
+    return nextRes;
+  }
+
   try {
-    const reply = await runChatAgent(history);
-    return NextResponse.json({ reply });
+    const reply = await runChatAgent(session.messages, {
+      session,
+      signal: req.signal,
+      region,
+      requestId,
+    });
+
+    await saveSession(session);
+
+    return withSessionCookie(
+      NextResponse.json({ reply, requestId }),
+      session.id
+    );
   } catch (err) {
+    await saveSession(session);
+
     if (isConfigError(err)) {
-      console.error("[api/chat] configuration error:", err.message);
+      logger.error("api/chat", "configuration error", {
+        requestId,
+        error: err.message,
+      });
       return NextResponse.json(
         { error: "The assistant is not fully configured yet. Please try again later." },
         { status: 503 }
       );
     }
-    console.error("[api/chat] failed:", err);
+
+    if (
+      err instanceof Error &&
+      (err.name === "AbortError" || /aborted/i.test(err.message))
+    ) {
+      return NextResponse.json({ error: "Request cancelled." }, { status: 400 });
+    }
+
+    logger.error("api/chat", "failed", {
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return NextResponse.json(
       { error: "The assistant is temporarily unavailable. Please try again shortly." },
       { status: 502 }

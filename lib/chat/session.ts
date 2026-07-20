@@ -6,6 +6,7 @@
  */
 
 import { createHash, randomBytes, randomUUID } from "crypto";
+import { persistChatToMongo } from "@/lib/chat/persist-mongo";
 import { getRedis, redisKey } from "@/lib/redis";
 import type { ChatMessagePayload } from "@/lib/types";
 
@@ -96,7 +97,7 @@ async function persistSession(session: ChatSession): Promise<void> {
         sessionRedisKey(session.id),
         JSON.stringify(session),
         "EX",
-        SESSION_TTL_SECONDS
+        SESSION_TTL_SECONDS,
       );
       return;
     } catch {
@@ -113,7 +114,7 @@ export function getSessionCookieName(): string {
 
 /** Create or load a session from cookie value. */
 export async function getOrCreateSession(
-  cookieValue: string | undefined
+  cookieValue: string | undefined,
 ): Promise<{ session: ChatSession; isNew: boolean }> {
   if (cookieValue) {
     const existing = await loadSession(cookieValue);
@@ -128,12 +129,10 @@ export async function getOrCreateSession(
 
 export async function saveSession(session: ChatSession): Promise<void> {
   await persistSession(session);
+  await persistChatToMongo(session);
 }
 
-export function appendUserMessage(
-  session: ChatSession,
-  content: string
-): void {
+export function appendUserMessage(session: ChatSession, content: string): void {
   session.messages.push({
     role: "user",
     content: content.slice(0, MAX_MESSAGE_CHARS),
@@ -143,7 +142,7 @@ export function appendUserMessage(
 
 export function appendAssistantMessage(
   session: ChatSession,
-  content: string
+  content: string,
 ): void {
   session.messages.push({
     role: "assistant",
@@ -155,7 +154,7 @@ export function appendAssistantMessage(
 export function setConversationState(
   session: ChatSession,
   state: ConversationState,
-  pendingOrderNumber: string | null = null
+  pendingOrderNumber: string | null = null,
 ): void {
   session.state = state;
   session.pendingOrderNumber =
@@ -169,7 +168,7 @@ export function resetConversationState(session: ChatSession): void {
 
 export function setPendingCategory(
   session: ChatSession,
-  category: string | null
+  category: string | null,
 ): void {
   session.pendingCategory = category?.trim() ? category.trim() : null;
 }

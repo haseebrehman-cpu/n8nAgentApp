@@ -21,8 +21,16 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Shopify iframe embed: let the storefront show through around the widget. */
 html.embed-frame,
+html.embed-frame body,
 body.embed-frame {
   background: transparent !important;
   background-color: transparent !important;
+  color-scheme: light;
+}
+
+html.embed-frame body,
+body.embed-frame {
+  overflow: hidden;
 }

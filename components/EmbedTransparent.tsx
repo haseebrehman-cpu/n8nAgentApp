@@ -20,16 +20,20 @@ export default function EmbedTransparent({
     };
 
     html.style.background = "transparent";
+    html.style.backgroundColor = "transparent";
     html.style.colorScheme = "light";
     body.style.background = "transparent";
+    body.style.backgroundColor = "transparent";
     body.style.overflow = "hidden";
     html.classList.add("embed-frame");
     body.classList.add("embed-frame");
 
     return () => {
       html.style.background = prev.htmlBg;
+      html.style.backgroundColor = "";
       html.style.colorScheme = prev.htmlScheme;
       body.style.background = prev.bodyBg;
+      body.style.backgroundColor = "";
       body.style.overflow = prev.bodyOverflow;
       html.classList.remove("embed-frame");
       body.classList.remove("embed-frame");

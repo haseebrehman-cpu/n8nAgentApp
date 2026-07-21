@@ -117,7 +117,7 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "search_catalog",
       description:
-        "Search the store's product catalog for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use when the customer asks to list/show products, asks how many, names a specific product, or has already clarified a broad category. Prefer concise queries (e.g. 'training boxing gloves', 'sauna vest', 'products on sale'). For bare ambiguous terms like 'boxing', 'gloves', or 'boxing gloves', do NOT search yet — ask one clarifying question first (training vs sparring vs competition, etc.). Do NOT use this for policy, shipping, or order-tracking questions.",
+        "Search the store's product catalog for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use when the customer asks about products, asks how many, names a specific product, or mentions a category (including bare terms like 'boxing', 'gloves', or 'boxing gloves'). Prefer concise queries (e.g. 'boxing gloves', 'sauna vest', 'products on sale'). Search and answer directly — do not ask clarifying questions first. Do NOT use this for policy, shipping, or order-tracking questions.",
       parameters: {
         type: "object",
         properties: {
@@ -457,7 +457,7 @@ function normalizeBrowseKey(text: string): string {
 }
 
 /**
- * Explicit list / show / count phrasing — search immediately, do not clarify.
+ * Explicit list / show / count phrasing — search immediately.
  */
 export function hasExplicitCatalogListOrCountIntent(text: string): boolean {
   const t = text.trim().toLowerCase();
@@ -474,89 +474,53 @@ export function hasExplicitCatalogListOrCountIntent(text: string): boolean {
 }
 
 /**
- * Bare ambiguous category phrases that need ONE clarifying question before
- * search/list (restored after the MCP refactor dropped browse_categories).
- * Only matches when the whole message is essentially the phrase.
+ * Bare category browse phrases (e.g. "boxing", "gloves") that should search
+ * and list products immediately — not ask clarifying questions.
  */
-const AMBIGUOUS_BROWSE_REPLIES: Record<string, string> = {
-  boxing:
-    "Sure! What boxing product are you looking for — boxing gloves, punching bags, head guards, hand wraps, shoes, or something else?",
-  gloves:
-    "Happy to help! Are you looking for boxing gloves, MMA gloves, fitness gloves, or another type?",
-  glove:
-    "Happy to help! Are you looking for boxing gloves, MMA gloves, fitness gloves, or another type?",
-  "boxing gloves":
-    "Of course! Are you looking for training gloves, sparring gloves, competition gloves, bag gloves, or kids' gloves?",
-  "boxing glove":
-    "Of course! Are you looking for training gloves, sparring gloves, competition gloves, bag gloves, or kids' gloves?",
-  mma: "Sure! What MMA product are you looking for — MMA gloves, punch bags, shorts, shin guards, or something else?",
-  "mma gloves":
-    "Of course! Are you looking for sparring gloves, training gloves, or kids' MMA gloves?",
-  "mma glove":
-    "Of course! Are you looking for sparring gloves, training gloves, or kids' MMA gloves?",
-  shoes:
-    "Happy to help! Are you looking for boxing shoes, training shoes, or another style?",
-  boots:
-    "Happy to help! Are you looking for boxing boots, or another type of footwear?",
-  "boxing shoes":
-    "Of course! Are you looking for a particular size, colour, or budget for boxing shoes?",
-  "boxing boots":
-    "Of course! Are you looking for a particular size, colour, or budget for boxing boots?",
-  shorts:
-    "Sure! Are you looking for boxing shorts, MMA shorts, sauna/sweat shorts, or another style?",
-  wraps:
-    "Happy to help! Are you looking for hand wraps for boxing, MMA, or Muay Thai — and any preferred length or colour?",
-  wrap:
-    "Happy to help! Are you looking for hand wraps for boxing, MMA, or Muay Thai — and any preferred length or colour?",
-  "hand wraps":
-    "Happy to help! Are you looking for a particular length, colour, or sport (boxing, MMA, Muay Thai)?",
-  "punch bags":
-    "Of course! Are you looking for heavy bags, freestanding bags, angle/uppercut bags, kids' bags, or a set?",
-  "punch bag":
-    "Of course! Are you looking for heavy bags, freestanding bags, angle/uppercut bags, kids' bags, or a set?",
-  "punching bags":
-    "Of course! Are you looking for heavy bags, freestanding bags, angle/uppercut bags, kids' bags, or a set?",
-  "punching bag":
-    "Of course! Are you looking for heavy bags, freestanding bags, angle/uppercut bags, kids' bags, or a set?",
-  "head guards":
-    "Sure! Are you looking for adult or kids' head guards, and for boxing or MMA?",
-  "head guard":
-    "Sure! Are you looking for adult or kids' head guards, and for boxing or MMA?",
-  headguards:
-    "Sure! Are you looking for adult or kids' head guards, and for boxing or MMA?",
-  headguard:
-    "Sure! Are you looking for adult or kids' head guards, and for boxing or MMA?",
-  fitness:
-    "Sure! What fitness product are you looking for — gym gloves, sauna wear, apparel, or something else?",
-  yoga: "Sure! What yoga product are you looking for — mats, apparel, or something else?",
-  apparel:
-    "Sure! What apparel are you looking for — shorts, compression wear, t-shirts, robes, or something else?",
-  kids: "Sure! What kids' product are you looking for — gloves, punch bags, head guards, or a set?",
-  sauna:
-    "Sure! Are you looking for sauna suits, sauna vests, sauna shorts, or something else?",
-  protein:
-    "Happy to help! Are you looking for a particular type of protein or nutrition product?",
-  nutrition:
-    "Happy to help! What kind of nutrition product are you looking for?",
-  equipment:
-    "Sure! What kind of equipment are you after — gloves, bags, guards, mats, or something else?",
-  accessories:
-    "Sure! What kind of accessory are you looking for — wraps, guards, or something else?",
-  belts: "Sure! Are you looking for weightlifting belts, or another type of belt?",
-  belt: "Sure! Are you looking for weightlifting belts, or another type of belt?",
-};
-
-/** Phrases that are ambiguous even without a dedicated reply template. */
-const AMBIGUOUS_BROWSE_PHRASES = new Set([
-  ...Object.keys(AMBIGUOUS_BROWSE_REPLIES),
+const CATEGORY_BROWSE_PHRASES = new Set([
+  "boxing",
+  "gloves",
+  "glove",
+  "boxing gloves",
+  "boxing glove",
+  "mma",
+  "mma gloves",
+  "mma glove",
+  "shoes",
+  "boots",
+  "boxing shoes",
+  "boxing boots",
+  "shorts",
+  "wraps",
+  "wrap",
+  "hand wraps",
+  "punch bags",
+  "punch bag",
+  "punching bags",
+  "punching bag",
+  "head guards",
+  "head guard",
+  "headguards",
+  "headguard",
+  "fitness",
+  "yoga",
+  "apparel",
+  "kids",
+  "sauna",
+  "protein",
+  "nutrition",
+  "equipment",
+  "accessories",
+  "belts",
+  "belt",
   "clothing",
   "gym equipment",
   "show boxing",
 ]);
 
 /**
- * True when the message is only an ambiguous browse/category phrase
- * (e.g. "boxing", "gloves", "boxing gloves") with no list/count intent.
+ * True when the message is only a category browse phrase
+ * (e.g. "boxing", "gloves", "boxing gloves").
  */
 export function isAmbiguousBrowseQuery(text: string): boolean {
   const key = normalizeBrowseKey(text);
@@ -571,17 +535,9 @@ export function isAmbiguousBrowseQuery(text: string): boolean {
   ) {
     return false;
   }
-  // Model / SKU style names should search, not clarify
+  // Model / SKU style names should search as specific products
   if (/\b(rdx|[a-z]*\d+[a-z]*|\d+oz)\b/i.test(key)) return false;
-  return AMBIGUOUS_BROWSE_PHRASES.has(key);
-}
-
-/** Clarifying reply for an ambiguous browse phrase (deterministic). */
-export function getAmbiguousBrowseClarifyReply(text: string): string {
-  const key = normalizeBrowseKey(text);
-  if (AMBIGUOUS_BROWSE_REPLIES[key]) return AMBIGUOUS_BROWSE_REPLIES[key]!;
-  const label = key || "product";
-  return `Sure! What ${label} are you looking for — a specific type, size, or use case?`;
+  return CATEGORY_BROWSE_PHRASES.has(key);
 }
 
 /** Message clearly looks like a product / shopping request. */
@@ -589,8 +545,8 @@ export function shouldForceProductSearch(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
-  // Ambiguous browse → clarify first (do not force catalog search).
-  if (isAmbiguousBrowseQuery(t)) return false;
+  // Category browse → search and answer (do not clarify first).
+  if (isAmbiguousBrowseQuery(t)) return true;
 
   if (isDiscountCodeQuery(t)) return false;
   if (isOrderTrackingIntent(t)) return false;
@@ -825,7 +781,7 @@ async function runTool(
               }),
               counting
                 ? `COLLECTION COUNT (every category): productCount is the storefront collection total for "${resolved.title}" (${resolved.handle}) — use THAT number for 'how many'. This matches the category page product count. Do NOT list products unless asked. Never invent products or stock.`
-                : `COLLECTION RESULTS: products from the storefront collection "${resolved.title}". productCount is the collection size returned. Prefer these over free-text guesses. Reply with PRODUCT LIST / COMPACT LIST when they asked to see items; otherwise clarify. Never invent products or stock.`
+                : `COLLECTION RESULTS: products from the storefront collection "${resolved.title}". productCount is the collection size returned. Prefer these over free-text guesses. Reply with PRODUCT LIST / COMPACT LIST. Never invent products or stock.`
             );
           }
         } catch (err) {
@@ -862,7 +818,7 @@ async function runTool(
       );
       return wrapMcpResult(
         compactCatalogMcpText(data, { query }),
-        "Live search results (compacted + title-filtered for EVERY query). productCount is how many returned titles match the product kind in the query (last meaningful word: vest, glove, suit, mat, wrap, guard, bag, etc.) — use THAT number ONLY when they explicitly asked 'how many' (prefer forCount/limit 50 so counts are not capped). Do NOT count unrelated hits that were dropped. This is NOT a guaranteed full-catalog category total if hasMore is true. Never invent products or stock. Reply using the professional layouts from the system prompt: COUNT REPLY only for explicit how-many; PRODUCT LIST / COMPACT LIST only when they asked to see/list items or intent is specific enough; never volunteer a count for a vague browse. Keep structure clean — no messy one-line dumps."
+        "Live search results (compacted + title-filtered for EVERY query). productCount is how many returned titles match the product kind in the query (last meaningful word: vest, glove, suit, mat, wrap, guard, bag, etc.) — use THAT number ONLY when they explicitly asked 'how many' (prefer forCount/limit 50 so counts are not capped). Do NOT count unrelated hits that were dropped. This is NOT a guaranteed full-catalog category total if hasMore is true. Never invent products or stock. Reply using the professional layouts from the system prompt: COUNT REPLY only for explicit how-many; PRODUCT LIST / COMPACT LIST for browse and list requests. Keep structure clean — no messy one-line dumps."
       );
     }
 
@@ -1163,13 +1119,6 @@ export async function runChatAgent(
   ) {
     setSessionIntent(session, "off_topic");
     return finishWithReply(session, OFF_TOPIC_REPLY);
-  }
-
-  // Bare ambiguous browse ("boxing", "gloves", "boxing gloves") → one clarifying
-  // question before any catalog search (deterministic; do not dump a product list).
-  if (isAmbiguousBrowseQuery(lastUser)) {
-    setSessionIntent(session, "product_information");
-    return finishWithReply(session, getAmbiguousBrowseClarifyReply(lastUser));
   }
 
   const productIntent =

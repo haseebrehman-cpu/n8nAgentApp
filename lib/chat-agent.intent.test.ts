@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   extractOrderLookupToken,
-  getAmbiguousBrowseClarifyReply,
   hasExplicitCatalogListOrCountIntent,
   hasRecentProductContext,
   isAmbiguousBrowseQuery,
@@ -46,7 +45,7 @@ describe("isDiscountCodeQuery", () => {
 });
 
 describe("isAmbiguousBrowseQuery", () => {
-  it("flags bare category phrases that need clarifying questions", () => {
+  it("flags bare category phrases", () => {
     expect(isAmbiguousBrowseQuery("boxing")).toBe(true);
     expect(isAmbiguousBrowseQuery("gloves")).toBe(true);
     expect(isAmbiguousBrowseQuery("boxing gloves")).toBe(true);
@@ -66,12 +65,6 @@ describe("isAmbiguousBrowseQuery", () => {
       true
     );
   });
-
-  it("returns a drill-down clarifying reply for boxing gloves", () => {
-    expect(getAmbiguousBrowseClarifyReply("boxing gloves")).toMatch(
-      /training gloves|sparring gloves|competition gloves/i
-    );
-  });
 });
 
 describe("shouldForceProductSearch", () => {
@@ -88,10 +81,10 @@ describe("shouldForceProductSearch", () => {
     );
   });
 
-  it("does not force search for ambiguous browse (clarify first)", () => {
-    expect(shouldForceProductSearch("boxing gloves")).toBe(false);
-    expect(shouldForceProductSearch("boxing")).toBe(false);
-    expect(shouldForceProductSearch("gloves")).toBe(false);
+  it("forces search for category browse (answer directly, no clarify)", () => {
+    expect(shouldForceProductSearch("boxing gloves")).toBe(true);
+    expect(shouldForceProductSearch("boxing")).toBe(true);
+    expect(shouldForceProductSearch("gloves")).toBe(true);
   });
 
   it("does not force search for tracking, off-topic, or bare order numbers", () => {

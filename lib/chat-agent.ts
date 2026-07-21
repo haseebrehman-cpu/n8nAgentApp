@@ -9,7 +9,7 @@ import type {
   ChatCompletionTool,
   ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
-import { toToolProduct, wrapToolData } from "@/lib/catalog/tool-payload";
+import { toCompactToolProduct, toToolProduct, prioritizeInStock, wrapToolData } from "@/lib/catalog/tool-payload";
 import {
   formatOrderTrackingChatReply,
   isValidEmailInput,
@@ -33,10 +33,15 @@ import { logger } from "@/lib/logger";
 import { stripAssistantMedia } from "@/lib/sanitize";
 import {
   countStorefrontProducts,
+  estimateCategoryProductCount,
   getDiscountedProducts,
   lookupCategory,
   searchProducts,
 } from "@/lib/shopify";
+import {
+  isKnownBrowsePhrase,
+  normalizeBrowsePhrase,
+} from "@/lib/shopify/static-menu";
 import {
   countLeafSubcategories,
   findTaxonomyNode,
@@ -51,15 +56,19 @@ const MAX_TOOL_ROUNDS = 6;
 const OPENAI_TIMEOUT_MS = 45_000;
 const AGENT_WALL_CLOCK_MS = 55_000;
 const MAX_COMPLETION_TOKENS = 1_000;
+/** Larger lists need more completion budget so we don't cut mid-list. */
+const LARGE_LIST_COMPLETION_TOKENS = 4_000;
+const LARGE_LIST_THRESHOLD = 8;
 const SEARCH_RESULT_LIMIT = 5;
 const DISCOUNT_RESULT_LIMIT = 8;
 const CATEGORY_SAMPLE_LIMIT = 12;
+const CATEGORY_LIST_MAX = 25;
 
 const FALLBACK_REPLY =
   "I'm sorry, I couldn't complete that request. Could you rephrase it or try again?";
 
 const NOT_AVAILABLE_REPLY =
-  "I couldn't find any products matching that in our catalog. Could you try a clearer product name, category, or a different keyword?";
+  "I'd be happy to help you find the right product. Could you tell me a bit more about what you're looking for — for example a category, size, or product name?";
 
 const DISCOUNT_CODE_REPLY =
   "We don't share discount or coupon codes in chat. If you'd like, I can show you products that are currently on sale at a reduced price instead.";
@@ -116,7 +125,7 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "lookup_category",
       description:
-        "Look up a store category/collection (e.g. yoga, boxing, strength training). Use for category counts or lists. Also use for follow-ups like \"list the ones in stock\" when continuing a prior category.",
+        "Look up a store category/collection (e.g. yoga, boxing, strength training). Use for category counts or lists when the customer explicitly wants products listed or counted. Also use for follow-ups like \"list the ones in stock\" when continuing a prior category. Prefer browse_categories first for short ambiguous terms (boxing, gloves, mma) so you can ask clarifying questions.",
       parameters: {
         type: "object",
         properties: {
@@ -135,6 +144,11 @@ const tools: ChatCompletionTool[] = [
             description:
               "When true, only return products that are in stock / available for sale.",
           },
+          limit: {
+            type: "number",
+            description:
+              "Optional max products to return in list mode (e.g. 20 when they ask to list 20). Caps at 25.",
+          },
         },
         required: ["category", "mode"],
       },
@@ -145,7 +159,7 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "browse_categories",
       description:
-        'Get the store\'s category tree (main categories like Boxing, MMA, Fitness, Yoga, Apparel, Kids and their subcategories). Use when the customer asks what categories/subcategories exist, how many categories there are, or what\'s inside a category (e.g. "what subcategories does Boxing have?"). NOT for product counts or product lists — use lookup_category for those.',
+        'Get the store\'s category tree (main categories like Boxing, MMA, Fitness, Yoga, Apparel, Kids and their subcategories). Use when the customer asks what categories/subcategories exist, how many categories there are, what\'s inside a category, OR sends a short ambiguous browse term (e.g. "boxing", "gloves", "mma", "apparel") so you can offer natural follow-up options. NOT for dumping full product lists — use lookup_category when they explicitly ask to list/show N products.',
       parameters: {
         type: "object",
         properties: {
@@ -264,21 +278,31 @@ export function isProductFollowUpQuery(text: string): boolean {
   return false;
 }
 
-/** Follow-up that lists/filters the previous category without naming it again. */
 export function isCategoryFollowUpQuery(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
-  if (extractCategoryIntent(t)) return false;
-
-  return (
-    /\b(list|show|browse)\s+(?:me\s+)?(?:all\s+|the\s+)?(ones?|them|these|those|products?)\b/i.test(
+  // Pronoun follow-ups ("list the ones in stock") — not a newly named category.
+  if (
+    /\b(list|show|browse)\s+(?:me\s+)?(?:all\s+|the\s+)?(ones?|them|these|those)\b/i.test(
       t
     ) ||
-    /\b(the\s+ones?|them|these|those)\b/i.test(t) &&
-      /\b(in\s+stock|available|list|show)\b/i.test(t) ||
+    (/\b(the\s+ones?|them|these|those)\b/i.test(t) &&
+      /\b(in\s+stock|available|list|show)\b/i.test(t)) ||
     /\bwhich\s+(ones?\s+)?(are\s+)?(in\s+stock|available)\b/i.test(t) ||
     /^(list|show)\s+them\b/i.test(t)
-  );
+  ) {
+    // "list these products in belt" names a category — not a follow-up.
+    if (
+      /\b(?:ones?|them|these|those)\s+(?:products?\s+)?in\s+(?:the\s+)?(?!stock\b)[a-z0-9]/i.test(
+        t
+      ) ||
+      /\bproducts?\s+in\s+(?:the\s+)?(?!stock\b)[a-z0-9]/i.test(t)
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export function wantsInStockOnly(text: string): boolean {
@@ -401,20 +425,38 @@ export function extractCategoryStructureIntent(
   if (!/\bcategor(?:y|ies)\b|\bsub[-\s]?categor/i.test(t)) return null;
 
   // Subcategory questions are always about structure.
-  const sub = t.match(
-    /\bsub[-\s]?categor(?:y|ies)\b(?:\s+(?:are\s+there\s+|do\s+(?:we|you)\s+have\s+)?(?:of|in|under|for|inside)\s+(?:the\s+)?([a-z0-9][\w\s&-]{1,40}?))?\s*\??$/i
-  );
   if (/\bsub[-\s]?categor/i.test(t)) {
     let category: string | null = null;
-    if (sub?.[1]) {
-      category = cleanCategoryName(sub[1]);
-    }
+
+    // "what subcategories does boxing have"
+    const doesHave = t.match(
+      /\bsub[-\s]?categor(?:y|ies)\s+does\s+([a-z0-9][\w\s&-]{1,40}?)\s+have\b/i
+    );
+    if (doesHave?.[1]) category = cleanCategoryName(doesHave[1]);
+
+    // "subcategories in/of/under boxing"
     if (!category) {
-      // "boxing subcategories" / "does boxing have subcategories"
-      const before = t.match(
-        /\b(?:does|do|of|in|under|for|inside)?\s*([a-z0-9][\w\s&-]{1,40}?)(?:'s)?\s+(?:have\s+)?sub[-\s]?categor(?:y|ies)\b/i
+      const sub = t.match(
+        /\bsub[-\s]?categor(?:y|ies)\b(?:\s+(?:are\s+there\s+|do\s+(?:we|you)\s+have\s+)?(?:of|in|under|for|inside)\s+(?:the\s+)?([a-z0-9][\w\s&-]{1,40}?))?\s*\??$/i
       );
-      if (before?.[1]) category = cleanCategoryName(before[1]);
+      if (sub?.[1]) category = cleanCategoryName(sub[1]);
+    }
+
+    if (!category) {
+      // "boxing subcategories" / "boxing's subcategories"
+      const before = t.match(
+        /\b([a-z0-9][\w\s&-]{1,40}?)(?:'s)?\s+sub[-\s]?categor(?:y|ies)\b/i
+      );
+      if (before?.[1]) {
+        const cleaned = cleanCategoryName(before[1]);
+        // Ignore leading interrogatives ("what subcategories…")
+        if (
+          cleaned &&
+          !/^(what|which|how|many|are|there|does|do|we|you)$/i.test(cleaned)
+        ) {
+          category = cleaned;
+        }
+      }
     }
     return { category };
   }
@@ -435,10 +477,15 @@ export function extractCategoryStructureIntent(
 
   if (!asksAboutCategories) return null;
 
-  // Zoom target: "categories in boxing" / "categories under fitness".
-  const zoom = t.match(
-    /\bcategor(?:y|ies)\b\s+(?:are\s+there\s+|do\s+(?:we|you)\s+have\s+)?(?:of|in|under|inside|within)\s+(?:the\s+)?([a-z0-9][\w\s&-]{1,40}?)\s*\??$/i
-  );
+  // Zoom target: "categories in boxing" / "categories under fitness" /
+  // "what categories are in fitness".
+  const zoom =
+    t.match(
+      /\bcategor(?:y|ies)\s+are\s+(?:there\s+)?(?:of|in|under|inside|within)\s+(?:the\s+)?([a-z0-9][\w\s&-]{1,40}?)\s*\??$/i
+    ) ||
+    t.match(
+      /\bcategor(?:y|ies)\b\s+(?:are\s+there\s+|do\s+(?:we|you)\s+have\s+)?(?:of|in|under|inside|within)\s+(?:the\s+)?([a-z0-9][\w\s&-]{1,40}?)\s*\??$/i
+    );
   const category = zoom?.[1] ? cleanCategoryName(zoom[1]) : null;
 
   return { category };
@@ -454,6 +501,13 @@ export interface CategoryIntent {
   category: string;
   mode: CategoryLookupMode;
   inStockOnly?: boolean;
+  /** Explicit list size when the customer asked for N products (e.g. list 20). */
+  limit?: number;
+  /**
+   * Short/ambiguous browse term — ask clarifying questions (via browse_categories)
+   * instead of dumping a product list or saying "not found".
+   */
+  clarify?: boolean;
 }
 
 const CATEGORY_STOP = new Set([
@@ -477,8 +531,6 @@ const CATEGORY_STOP = new Set([
   "item",
   "category",
   "categories",
-  "collection",
-  "collections",
   "store",
   "catalog",
   "please",
@@ -502,16 +554,41 @@ const CATEGORY_STOP = new Set([
 
 function cleanCategoryName(raw: string): string | null {
   const cleaned = raw
-    .replace(/[^a-z0-9\s-]/gi, " ")
+    .replace(/[^a-z0-9\s+-]/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
   if (!cleaned) return null;
+
+  // Exact nav labels (Collections, Kara, IBA Approved Boxing Range, …).
+  if (isKnownBrowsePhrase(cleaned)) {
+    return normalizeBrowsePhrase(cleaned);
+  }
+
   const words = cleaned
     .split(" ")
-    .filter((w) => w && !CATEGORY_STOP.has(w));
-  if (words.length === 0 || words.length > 4) return null;
-  return words.join(" ");
+    .filter((w) => w && !CATEGORY_STOP.has(w) && !/^\d+$/.test(w));
+  if (words.length === 0 || words.length > 8) return null;
+  const joined = words.join(" ");
+  if (isKnownBrowsePhrase(joined)) {
+    return normalizeBrowsePhrase(joined);
+  }
+  return joined;
+}
+
+/** Pull an explicit list size from phrases like "list 20 boxing gloves". */
+export function extractListQuantity(text: string): number | null {
+  const m = text
+    .trim()
+    .toLowerCase()
+    .match(
+      /\b(?:list|show|browse|give|get)\s+(?:me\s+)?(?:all\s+)?(\d{1,3})\b|\b(\d{1,3})\s+(?:products?|items?|options?)\b/i
+    );
+  const raw = m?.[1] ?? m?.[2];
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(n, CATEGORY_LIST_MAX);
 }
 
 function isWholeCatalogHowManyTail(raw: string): boolean {
@@ -524,13 +601,29 @@ function isWholeCatalogHowManyTail(raw: string): boolean {
   );
 }
 
+/** True when the message is only a known browse/category phrase (no list/count verb). */
+export function isBrowseClarifyQuery(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[?.!,]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return false;
+  return isKnownBrowsePhrase(t);
+}
+
 /**
  * Detect category/collection questions and whether they want a count or a list.
  * Count wins when both "list" and "count" appear (e.g. "list ... products count").
+ * Bare category phrases return clarify:true so we ask follow-ups first.
  */
 export function extractCategoryIntent(text: string): CategoryIntent | null {
   const t = text.trim().toLowerCase();
   if (!t) return null;
+
+  // Pronoun follow-ups reuse the prior category — handled separately.
+  if (isCategoryFollowUpQuery(t)) return null;
 
   // "what categories do you have" / "how many subcategories in boxing"
   // are about the category tree, not products in one category.
@@ -545,6 +638,7 @@ export function extractCategoryIntent(text: string): CategoryIntent | null {
     return null;
   }
 
+  const listLimit = extractListQuantity(t);
   let category: string | null = null;
 
   // "how many products we have in strength training" / "products in belt"
@@ -568,14 +662,15 @@ export function extractCategoryIntent(text: string): CategoryIntent | null {
 
   // Prefer "... products in belt" / "list these products in belts" over
   // "list these products" (which would wrongly capture "these").
+  // Quantity-aware: "list 20 boxing gloves" / "show me 10 yoga mats"
   const patterns: RegExp[] = [
-    /\b(?:list|show|browse)\s+(?:me\s+)?(?:all\s+|these\s+|those\s+|some\s+)?products?\s+in\s+(?:the\s+)?([a-z0-9][\w\s-]{1,40}?)\s*\??$/i,
+    /\b(?:list|show|browse)\s+(?:me\s+)?(?:all\s+|these\s+|those\s+|some\s+)?(?:\d{1,3}\s+)?products?\s+in\s+(?:the\s+)?([a-z0-9][\w\s-]{1,40}?)\s*\??$/i,
     /\bproducts?\s+in\s+(?:the\s+)?([a-z0-9][\w\s-]{1,40}?)\s*(?:categor(?:y|ies))?\s*\??$/i,
     /\b(?:under|in|from|for)\s+(?:the\s+)?([a-z0-9][\w\s-]{0,40}?)\s+categor(?:y|ies)\b/i,
     /\b([a-z0-9][\w\s-]{1,40}?)\s+categor(?:y|ies)\b/i,
     /\b([a-z0-9][\w\s-]{0,40}?)\s*-?\s*related\s+products?\b/i,
-    /\b(?:list|show|browse)\s+(?:me\s+)?(?:all\s+)?([a-z0-9][\w\s-]{0,40}?)\s+products?\b/i,
-    /\b(?:list|show|browse)\s+(?:me\s+)?(?:all\s+)?([a-z0-9][\w\s-]{1,40}?)\s*\??$/i,
+    /\b(?:list|show|browse)\s+(?:me\s+)?(?:all\s+)?(?:\d{1,3}\s+)?([a-z0-9][\w\s-]{0,40}?)\s+products?\b/i,
+    /\b(?:list|show|browse)\s+(?:me\s+)?(?:all\s+)?(?:\d{1,3}\s+)?([a-z0-9][\w\s-]{1,40}?)\s*\??$/i,
     /\b(?:count|number)\s+of\s+([a-z0-9][\w\s-]{0,40}?)\s+products?\b/i,
     /\b([a-z0-9][\w\s-]{1,40}?)\s+products?\s+count\b/i,
     /\bin\s+([a-z0-9][\w\s-]{1,40}?)\s+we\s+have\b/i,
@@ -593,6 +688,19 @@ export function extractCategoryIntent(text: string): CategoryIntent | null {
     }
   }
 
+  // Bare browse phrases ("boxing", "gloves", "boxing gloves") → clarify first.
+  if (!category && isBrowseClarifyQuery(t)) {
+    const phrase = t
+      .replace(/[?.!,]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return {
+      category: phrase,
+      mode: "list",
+      clarify: true,
+    };
+  }
+
   if (!category) return null;
 
   // Prefer count when they ask for a count/how many/number — even if "list" appears.
@@ -604,6 +712,7 @@ export function extractCategoryIntent(text: string): CategoryIntent | null {
   return {
     category,
     mode: wantsCount ? "count" : "list",
+    ...(listLimit && !wantsCount ? { limit: listLimit } : {}),
   };
 }
 
@@ -722,6 +831,7 @@ export function shouldForceProductSearch(text: string): boolean {
   if (isCategoryQuery(t)) return false;
   if (isCategoryStructureQuery(t)) return false;
   if (isCategoryFollowUpQuery(t)) return false;
+  if (isBrowseClarifyQuery(t)) return false;
   if (isOrderTrackingIntent(t)) return false;
   if (isOffTopicQuery(t)) return false;
   if (isBareOrderNumberToken(t)) return false;
@@ -843,36 +953,110 @@ function summarizeTaxonomyNode(
   return summary;
 }
 
+/**
+ * Nav collections are often empty placeholders while products live under
+ * related titles/types (Sauna Shorts → Sweat Shorts). Refresh zero counts
+ * before showing subcategory sizes to the customer.
+ */
+async function enrichZeroProductCounts(
+  node: TaxonomyNode,
+  options: { signal?: AbortSignal }
+): Promise<TaxonomyNode> {
+  const children = await Promise.all(
+    node.children.map(async (child) => {
+      const enrichedChild = await enrichZeroProductCounts(child, options);
+      if (
+        enrichedChild.productCount !== null &&
+        enrichedChild.productCount > 0
+      ) {
+        return enrichedChild;
+      }
+
+      try {
+        const estimated = await estimateCategoryProductCount(
+          enrichedChild.title,
+          { signal: options.signal }
+        );
+        if (estimated.count > 0) {
+          return { ...enrichedChild, productCount: estimated.count };
+        }
+      } catch {
+        // Keep original count on lookup failure.
+      }
+      return enrichedChild;
+    })
+  );
+
+  let productCount = node.productCount;
+  if ((productCount === null || productCount === 0) && node.children.length === 0) {
+    try {
+      const estimated = await estimateCategoryProductCount(node.title, {
+        signal: options.signal,
+      });
+      if (estimated.count > 0) productCount = estimated.count;
+    } catch {
+      // keep
+    }
+  }
+
+  return { ...node, productCount, children };
+}
+
 async function runBrowseCategories(
   categoryArg: string,
-  options: { signal?: AbortSignal }
+  options: { signal?: AbortSignal; clarify?: boolean }
 ): Promise<string> {
   const taxonomy = await getStoreTaxonomy({ signal: options.signal });
+  const clarify = Boolean(options.clarify);
+
+  const emptyCountHint =
+    "productCount may be enriched beyond empty nav collections (products often match related names like Sweat Shorts for Sauna Shorts). A count of 0 means we still found nothing via collection, product type, tags, or title aliases — only then say that subcategory looks empty, and offer to search by product name. Never invent counts.";
 
   if (categoryArg) {
     const node = findTaxonomyNode(taxonomy, categoryArg);
     if (!node) {
+      // Try parent token for phrases like "boxing gloves" → "boxing"
+      const parentToken = categoryArg.trim().split(/\s+/)[0] ?? "";
+      const parentNode =
+        parentToken && parentToken.toLowerCase() !== categoryArg.toLowerCase()
+          ? findTaxonomyNode(taxonomy, parentToken)
+          : null;
+      if (parentNode) {
+        const enriched = await enrichZeroProductCounts(parentNode, options);
+        return wrapToolData({
+          category: summarizeTaxonomyNode(enriched, 2),
+          requested: categoryArg,
+          leafSubcategoryCount: countLeafSubcategories(enriched),
+          hint: clarify
+            ? `The customer is browsing "${categoryArg}". Use these related subcategories to ask a natural follow-up with bullet options (types, use cases). Do NOT say products were not found. Do NOT dump the full catalog. ${emptyCountHint}`
+            : `Closest matching parent category from navigation. Answer using these names. Offer to show products from a subcategory via lookup_category. ${emptyCountHint}`,
+        });
+      }
       return wrapToolData({
         category: categoryArg,
         found: false,
         mainCategories: taxonomy.categories.map((c) => c.title),
-        hint:
-          "That category was not found in the store navigation. Tell the customer, then offer the mainCategories list so they can pick one. Do not invent subcategories.",
+        hint: clarify
+          ? `The customer sent a short browse term ("${categoryArg}"). Even without an exact nav match, ask a natural clarifying question with likely options (e.g. for gloves: boxing / MMA / bag / sparring). Never say the catalog has no products. Invite them to narrow size, use, or budget.`
+          : "That category was not found in the store navigation. Tell the customer, then offer the mainCategories list so they can pick one. Do not invent subcategories.",
       });
     }
+    const enriched = await enrichZeroProductCounts(node, options);
     return wrapToolData({
-      category: summarizeTaxonomyNode(node, 2),
-      leafSubcategoryCount: countLeafSubcategories(node),
-      hint:
-        "This is the real category tree from the store navigation. Answer using these names and counts. productCount is the number of products in that collection (null = unknown — do not guess it). subcategoryCount counts direct subcategories; leafSubcategoryCount counts the deepest browseable subcategories. Offer to show products from any subcategory (via lookup_category) if they want.",
+      category: summarizeTaxonomyNode(enriched, 2),
+      leafSubcategoryCount: countLeafSubcategories(enriched),
+      hint: clarify
+        ? `The customer sent a short/ambiguous browse term. Do NOT dump a long product list and do NOT say products were not found. Use these subcategory names to ask a natural follow-up (bullet options). Offer to list products once they pick one. ${emptyCountHint}`
+        : `This is the store category tree. Answer using these names and counts. ${emptyCountHint} Offer to show products from any subcategory via lookup_category.`,
     });
   }
 
   return wrapToolData({
     totalMainCategories: taxonomy.categories.length,
     categories: taxonomy.categories.map((c) => summarizeTaxonomyNode(c, 1)),
-    hint:
-      "These are the store's main categories and their direct subcategories from the site navigation. For 'how many categories' answer with totalMainCategories and name them. productCount null = unknown — never invent numbers. Offer to explore any category's subcategories or products.",
+    hint: clarify
+      ? "The customer sent a short browse term. Ask a natural clarifying question using related mainCategories (or common product types). Never say the catalog is empty. Offer options and invite them to narrow down."
+      : "These are the store's main categories and their direct subcategories from the site navigation. For 'how many categories' answer with totalMainCategories and name them. productCount null = unknown — never invent numbers. Offer to explore any category's subcategories or products.",
   });
 }
 
@@ -893,7 +1077,7 @@ async function runTool(
         return wrapToolData({
           results: [],
           hint:
-            "No products matched. Retry once with different shorter keywords. If still empty, acknowledge what they asked for and say you could not find matching products — invite a clearer product name or keyword. Do not invent products.",
+            "No products matched this keyword yet. Retry once with shorter or related keywords (e.g. gloves → boxing gloves). If still empty after expansion, ask what they are looking for in a natural way — do NOT sound like a failed database search. Never invent products.",
         });
       }
       return wrapToolData({
@@ -922,11 +1106,17 @@ async function runTool(
       const modeRaw = String(args.mode ?? "count").trim().toLowerCase();
       const mode: "count" | "list" = modeRaw === "list" ? "list" : "count";
       const inStockOnly = Boolean(args.inStockOnly);
+      const limitRaw = Number(args.limit);
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(Math.floor(limitRaw), CATEGORY_LIST_MAX)
+          : undefined;
       if (!category) return JSON.stringify({ error: "category is required" });
 
       const result = await lookupCategory(category, mode, {
         signal: options.signal,
         inStockOnly,
+        limit,
       });
 
       if (result.source === "none" || result.totalProducts === 0) {
@@ -939,7 +1129,7 @@ async function runTool(
           productType: null,
           results: [],
           hint:
-            "No matching category, productType, or collection was found. Tell the customer you could not find that category, and invite another category name. Do not invent a count or product list.",
+            "No exact category/productType/collection match yet. Do NOT immediately say the store has no products. Ask a natural clarifying question about what they want (type, size, use case), offer related categories from browse_categories, or retry search_products with related keywords. Only after those fail should you gently say you could not find a match.",
         });
       }
 
@@ -950,6 +1140,8 @@ async function runTool(
             collectionCount: result.matched.productsCount,
           }
         : null;
+
+      const sampleLimit = limit ?? CATEGORY_SAMPLE_LIMIT;
 
       // List mode with a known total must never claim the category is empty.
       if (mode === "list" && result.products.length === 0 && result.totalProducts > 0) {
@@ -984,6 +1176,9 @@ async function runTool(
         });
       }
 
+      const ranked = prioritizeInStock(result.products).slice(0, sampleLimit);
+      const useCompact = ranked.length >= LARGE_LIST_THRESHOLD;
+
       return wrapToolData({
         category,
         mode: "list",
@@ -993,17 +1188,30 @@ async function runTool(
         productType: result.productType,
         matchedCollection,
         source: result.source,
-        results: result.products.slice(0, CATEGORY_SAMPLE_LIMIT).map(toToolProduct),
-        sampleCount: Math.min(result.products.length, CATEGORY_SAMPLE_LIMIT),
+        results: useCompact
+          ? ranked.map(toCompactToolProduct)
+          : ranked.map(toToolProduct),
+        sampleCount: ranked.length,
+        requestedLimit: limit ?? null,
+        layout: useCompact ? "compact" : "detailed",
         hint: inStockOnly
           ? "List the in-stock products from results. Mention the category totalProducts if useful. Never say the category was not found when results are present."
-          : "Say the totalProducts count for this category/productType, then briefly list the sample in results. Make clear this is a sample when sampleCount < totalProducts. Never claim the sample size is the full category count.",
+          : useCompact
+            ? `CRITICAL: results has sampleCount=${ranked.length} products. You MUST list ALL ${ranked.length} using the COMPACT LIST LAYOUT (one line each). Say you are showing ${ranked.length} of ${result.totalProducts} — never claim more than sampleCount. Do not stop early. Do not use the detailed multi-line layout.`
+            : limit
+              ? `The customer asked for about ${limit} products. List every item in results (sampleCount=${ranked.length}). Mention totalProducts if the category is larger.`
+              : result.totalProducts > 10
+                ? "Say the totalProducts count, then briefly list this sample. Never claim the sample size is the full category count."
+                : "Say the totalProducts count for this category/productType, then briefly list the sample in results. Make clear this is a sample when sampleCount < totalProducts. Never claim the sample size is the full category count.",
       });
     }
 
     if (name === "browse_categories") {
       const category = String(args.category ?? "").trim();
-      return runBrowseCategories(category, options);
+      return runBrowseCategories(category, {
+        signal: options.signal,
+        clarify: Boolean(args.clarify),
+      });
     }
 
     if (name === "list_discounted_products") {
@@ -1139,7 +1347,8 @@ function resolveTurnIntent(
   if (
     flags?.categoryIntent ||
     extractCategoryIntent(lastUser) ||
-    isCategoryFollowUpQuery(lastUser)
+    isCategoryFollowUpQuery(lastUser) ||
+    isBrowseClarifyQuery(lastUser)
   ) {
     return "category_lookup";
   }
@@ -1333,6 +1542,7 @@ export async function runChatAgent(
         }
       : null;
 
+  const wantsClarifyBrowse = Boolean(categoryIntent?.clarify);
   const isFollowUp =
     isProductFollowUpQuery(lastUser) || Boolean(categoryFollowUp);
   const forceSearch =
@@ -1369,6 +1579,9 @@ export async function runChatAgent(
   let sawEmptyCatalog = false;
   let usedDiscountTool = false;
   let usedCountTool = false;
+  let needsLargeListBudget = Boolean(
+    categoryIntent?.limit && categoryIntent.limit >= LARGE_LIST_THRESHOLD
+  );
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal.aborted) {
@@ -1377,7 +1590,7 @@ export async function runChatAgent(
 
     let toolChoice: ChatCompletionToolChoiceOption = "auto";
     if (round === 0) {
-      if (structureIntent) {
+      if (structureIntent || wantsClarifyBrowse) {
         toolChoice = {
           type: "function",
           function: { name: "browse_categories" },
@@ -1409,7 +1622,9 @@ export async function runChatAgent(
         tools,
         tool_choice: toolChoice,
         temperature: 0.3,
-        max_tokens: MAX_COMPLETION_TOKENS,
+        max_tokens: needsLargeListBudget
+          ? LARGE_LIST_COMPLETION_TOKENS
+          : MAX_COMPLETION_TOKENS,
       },
       { signal }
     );
@@ -1444,9 +1659,9 @@ export async function runChatAgent(
     if (!toolCalls || toolCalls.length === 0) {
       let reply = stripAssistantMedia(message.content ?? "") || FALLBACK_REPLY;
       if (choice.finish_reason === "length") {
-        reply =
-          reply ||
-          "Here is a partial answer — ask me to continue if you need more detail.";
+        reply = reply
+          ? `${reply.trim()}\n\n_(List was cut short — ask me to continue or show the next set.)_`
+          : "Here is a partial answer — ask me to continue if you need more detail.";
       }
       if (
         productIntent &&
@@ -1471,22 +1686,30 @@ export async function runChatAgent(
       } catch {
         // empty args
       }
-      // Prefer deterministic structure intent over model-guessed args.
+      // Prefer deterministic structure / browse-clarify intent over model-guessed args.
       if (
         toolCall.function.name === "browse_categories" &&
-        structureIntent &&
+        (structureIntent || wantsClarifyBrowse) &&
         round === 0
       ) {
-        args = structureIntent.category
-          ? { category: structureIntent.category }
-          : {};
+        const zoom =
+          structureIntent?.category ??
+          (wantsClarifyBrowse ? categoryIntent?.category : null);
+        args = zoom
+          ? { category: zoom, clarify: wantsClarifyBrowse }
+          : { clarify: wantsClarifyBrowse };
       }
       // Prefer deterministic category intent over model-guessed args.
-      if (toolCall.function.name === "lookup_category" && categoryIntent) {
+      if (
+        toolCall.function.name === "lookup_category" &&
+        categoryIntent &&
+        !categoryIntent.clarify
+      ) {
         args = {
           category: categoryIntent.category,
           mode: categoryIntent.mode,
           inStockOnly: Boolean(categoryIntent.inStockOnly),
+          ...(categoryIntent.limit ? { limit: categoryIntent.limit } : {}),
         };
       }
       const isDiscountTool = toolCall.function.name === "list_discounted_products";
@@ -1527,7 +1750,18 @@ export async function runChatAgent(
         const parsed = JSON.parse(unwrapped) as {
           results?: unknown[];
           totalProducts?: number;
+          sampleCount?: number;
+          layout?: string;
         };
+        if (
+          typeof parsed.sampleCount === "number" &&
+          parsed.sampleCount >= LARGE_LIST_THRESHOLD
+        ) {
+          needsLargeListBudget = true;
+        }
+        if (parsed.layout === "compact") {
+          needsLargeListBudget = true;
+        }
         if (isCountTool) {
           sawEmptyCatalog = false;
         } else if (
@@ -1538,6 +1772,9 @@ export async function runChatAgent(
           sawEmptyCatalog = true;
         } else if (Array.isArray(parsed.results) && parsed.results.length > 0) {
           sawEmptyCatalog = false;
+          if (parsed.results.length >= LARGE_LIST_THRESHOLD) {
+            needsLargeListBudget = true;
+          }
         }
       } catch {
         // ignore

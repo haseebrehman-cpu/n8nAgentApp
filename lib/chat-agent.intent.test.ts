@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   extractCategoryIntent,
+  extractCategoryStructureIntent,
   extractLastCategoryFromHistory,
+  extractListQuantity,
   extractOrderLookupToken,
   hasRecentProductContext,
   isBareOrderNumberToken,
+  isBrowseClarifyQuery,
   isCatalogCountQuery,
   isCategoryFollowUpQuery,
   isCategoryQuery,
+  isCategoryStructureQuery,
   isOffTopicQuery,
   isOrderTrackingIntent,
   isProductFollowUpQuery,
@@ -35,11 +39,20 @@ describe("isOrderTrackingIntent", () => {
 });
 
 describe("shouldForceProductSearch", () => {
-  it("forces search for product-like messages", () => {
-    expect(shouldForceProductSearch("boxing gloves")).toBe(true);
+  it("forces search for specific product-like messages", () => {
     expect(shouldForceProductSearch("do you sell shin guards")).toBe(true);
     expect(shouldForceProductSearch("looking for kids punch bag")).toBe(true);
     expect(shouldForceProductSearch("robo kids punch")).toBe(true);
+    expect(shouldForceProductSearch("RDX F6 Kara Boxing Training Gloves")).toBe(
+      true
+    );
+  });
+
+  it("does not force keyword search for ambiguous browse terms", () => {
+    expect(shouldForceProductSearch("boxing gloves")).toBe(false);
+    expect(shouldForceProductSearch("boxing")).toBe(false);
+    expect(shouldForceProductSearch("gloves")).toBe(false);
+    expect(shouldForceProductSearch("mma")).toBe(false);
   });
 
   it("does not force search for tracking, off-topic, or bare order numbers", () => {
@@ -141,13 +154,75 @@ describe("extractCategoryIntent", () => {
     });
   });
 
+  it("parses list quantity without treating the number as the category", () => {
+    expect(extractListQuantity("list 20 boxing gloves")).toBe(20);
+    expect(extractCategoryIntent("list 20 boxing gloves")).toEqual({
+      category: "boxing gloves",
+      mode: "list",
+      limit: 20,
+    });
+    expect(extractCategoryIntent("show me 10 yoga mats")).toEqual({
+      category: "yoga mats",
+      mode: "list",
+      limit: 10,
+    });
+  });
+
+  it("treats bare browse phrases as clarify intent", () => {
+    expect(isBrowseClarifyQuery("boxing")).toBe(true);
+    expect(isBrowseClarifyQuery("gloves")).toBe(true);
+    expect(isBrowseClarifyQuery("boxing gloves")).toBe(true);
+    expect(extractCategoryIntent("boxing")).toEqual({
+      category: "boxing",
+      mode: "list",
+      clarify: true,
+    });
+    expect(extractCategoryIntent("boxing gloves")).toEqual({
+      category: "boxing gloves",
+      mode: "list",
+      clarify: true,
+    });
+    expect(extractCategoryIntent("mma")).toEqual({
+      category: "mma",
+      mode: "list",
+      clarify: true,
+    });
+  });
+
+  it("recognises mega-menu subcategory and series browse phrases", () => {
+    expect(isBrowseClarifyQuery("gym belts")).toBe(true);
+    expect(isBrowseClarifyQuery("yoga mats")).toBe(true);
+    expect(isBrowseClarifyQuery("kara")).toBe(true);
+    expect(isBrowseClarifyQuery("freestanding punch bags")).toBe(true);
+    expect(isBrowseClarifyQuery("immaf approved")).toBe(true);
+    expect(isBrowseClarifyQuery("strength training")).toBe(true);
+    expect(isBrowseClarifyQuery("collections")).toBe(true);
+    expect(extractCategoryIntent("kara")).toEqual({
+      category: "kara",
+      mode: "list",
+      clarify: true,
+    });
+    expect(extractCategoryIntent("how many gym belts")).toEqual({
+      category: "gym belts",
+      mode: "count",
+    });
+    expect(extractCategoryIntent("list products in collections")).toEqual({
+      category: "collections",
+      mode: "list",
+    });
+    expect(
+      extractCategoryIntent("how many freestanding punch bags")
+    ).toEqual({
+      category: "freestanding punch bags",
+      mode: "count",
+    });
+  });
+
   it("does not treat whole-catalog totals as a category", () => {
     expect(extractCategoryIntent("how many products across all categories")).toBe(
       null
     );
     expect(extractCategoryIntent("how many products do you have")).toBe(null);
-    // Bare product name stays a product search, not a category lookup.
-    expect(isCategoryQuery("boxing gloves")).toBe(false);
   });
 });
 
@@ -222,6 +297,7 @@ describe("shouldForceProductSearch with categories", () => {
       )
     ).toBe(false);
     expect(shouldForceProductSearch("how many boxing gloves")).toBe(false);
+    expect(shouldForceProductSearch("list 20 boxing gloves")).toBe(false);
   });
 });
 
@@ -250,6 +326,7 @@ describe("category follow-ups", () => {
     ).toBe("strength training");
   });
 });
+
 describe("isOffTopicQuery", () => {
   it("detects trivia and general knowledge", () => {
     expect(isOffTopicQuery("what is the capital of germany")).toBe(true);
@@ -315,5 +392,13 @@ describe("extractOrderLookupToken", () => {
     expect(extractOrderLookupToken("find boxing gloves")).toBeNull();
     expect(extractOrderLookupToken("track this order")).toBeNull();
     expect(isBareOrderNumberToken("boxing gloves")).toBe(false);
+  });
+});
+
+describe("isCategoryQuery", () => {
+  it("matches bare browse and explicit list/count", () => {
+    expect(isCategoryQuery("boxing gloves")).toBe(true);
+    expect(isCategoryQuery("list 20 boxing gloves")).toBe(true);
+    expect(isCategoryQuery("how many boxing gloves")).toBe(true);
   });
 });

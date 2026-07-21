@@ -9,6 +9,10 @@
 
 import { shopifyAdminGraphql } from "@/lib/shopify/admin-client";
 import { logger } from "@/lib/logger";
+import {
+  STATIC_MENU_DEFS,
+  type StaticMenuDef,
+} from "@/lib/shopify/static-menu";
 
 export interface TaxonomyNode {
   title: string;
@@ -34,16 +38,14 @@ const EXCLUDED_TITLE_RE =
 
 const TAXONOMY_TTL_MS = 10 * 60 * 1000;
 
-/** Fallback when the menu cannot be read (e.g. missing API scope). */
-const STATIC_CATEGORIES = [
-  "Boxing",
-  "MMA",
-  "Fitness",
-  "Yoga",
-  "Apparel",
-  "Collections",
-  "Kids",
-];
+function staticMenuToNodes(defs: StaticMenuDef[]): TaxonomyNode[] {
+  return defs.map((def) => ({
+    title: def.title,
+    handle: null,
+    productCount: null,
+    children: def.children?.length ? staticMenuToNodes(def.children) : [],
+  }));
+}
 
 export interface RawMenuItem {
   title: string;
@@ -198,12 +200,7 @@ async function fetchCollectionCounts(
 function staticTaxonomy(): StoreTaxonomy {
   return {
     source: "static",
-    categories: STATIC_CATEGORIES.map((title) => ({
-      title,
-      handle: null,
-      productCount: null,
-      children: [],
-    })),
+    categories: staticMenuToNodes(STATIC_MENU_DEFS),
   };
 }
 
@@ -287,7 +284,9 @@ function normalizeTitle(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/&/g, " and ")
+    .replace(/\+/g, " plus ")
     .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 

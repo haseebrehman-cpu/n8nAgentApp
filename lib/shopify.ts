@@ -27,6 +27,8 @@ export interface ShopifyFetchOptions {
   signal?: AbortSignal;
   /** When listing a category, only include in-stock / available products. */
   inStockOnly?: boolean;
+  /** Cap for category list samples (defaults to CATEGORY_LIST_LIMIT, max MAX_RESULTS). */
+  limit?: number;
 }
 
 function buildSearchQuery(withMarketPricing: boolean): string {
@@ -252,6 +254,66 @@ const STOP_WORDS = new Set([
   "me",
 ]);
 
+/** Expand ambiguous short keywords into related catalog terms. */
+const SEARCH_SYNONYMS: Record<string, string[]> = {
+  gloves: ["boxing gloves", "mma gloves", "bag gloves"],
+  glove: ["boxing gloves", "mma gloves"],
+  shorts: ["boxing shorts", "mma shorts", "compression shorts", "sweat shorts"],
+  wraps: ["hand wraps", "boxing wraps"],
+  wrap: ["hand wraps"],
+  headguard: ["head guard", "boxing head guard"],
+  headguards: ["head guard", "boxing head guard"],
+  "punching bag": ["punch bag", "heavy bag"],
+  "punch bag": ["punching bag", "heavy bag"],
+  shoes: ["boxing shoes", "boxing boots"],
+  boots: ["boxing boots", "boxing shoes"],
+  equipment: ["boxing equipment", "training equipment"],
+  apparel: ["boxing apparel", "mma apparel"],
+  protein: ["protein powder", "whey protein"],
+  sauna: ["sweat", "sauna suit", "sweat suit"],
+  "sauna shorts": ["sweat shorts", "sauna short"],
+  "sauna short": ["sweat shorts"],
+  "sauna t-shirts": ["sweat t-shirt", "sweat shirt", "sauna t-shirt"],
+  "sauna t-shirt": ["sweat t-shirt", "sweat shirt"],
+  "sauna vests": ["sweat vest", "sauna vest"],
+  "sauna vest": ["sweat vest"],
+  "sauna leggings": ["sweat leggings", "sauna legging"],
+  "sauna suits": ["sweat suit", "sauna suit"],
+  "sauna suit": ["sweat suit"],
+};
+
+/**
+ * Related category names for empty nav collections (e.g. Sauna Shorts ↔ Sweat Shorts).
+ */
+export function categoryAliasTerms(category: string): string[] {
+  const term = category.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!term) return [];
+
+  const aliases = new Set<string>([term]);
+  const known = SEARCH_SYNONYMS[term];
+  if (known) {
+    for (const a of known) aliases.add(a);
+  }
+
+  // Sauna Range items are often titled / typed as "Sweat …"
+  if (term.startsWith("sauna ")) {
+    aliases.add(`sweat ${term.slice("sauna ".length)}`);
+  } else if (term.startsWith("sweat ")) {
+    aliases.add(`sauna ${term.slice("sweat ".length)}`);
+  }
+
+  // Light singular/plural for the last word
+  const words = term.split(" ");
+  const last = words[words.length - 1] ?? "";
+  if (last.endsWith("s") && last.length > 2 && !last.endsWith("ss")) {
+    aliases.add([...words.slice(0, -1), last.slice(0, -1)].join(" "));
+  } else if (last) {
+    aliases.add([...words.slice(0, -1), `${last}s`].join(" "));
+  }
+
+  return [...aliases].filter(Boolean);
+}
+
 function buildSearchQueries(keyword: string): string[] {
   const sanitized = keyword.replace(/["\\]/g, " ").trim();
   if (!sanitized) return [];
@@ -270,6 +332,21 @@ function buildSearchQueries(keyword: string): string[] {
     }
   } else if (tokens.length === 1) {
     queries.push(tokens[0]!);
+  }
+
+  // Prefer productType / title field matches before giving up.
+  const typeLabel = toProductTypeLabel(sanitized);
+  if (typeLabel) {
+    queries.push(`product_type:"${typeLabel}"`);
+    queries.push(`title:*${sanitized}*`);
+  }
+
+  const expansions = SEARCH_SYNONYMS[sanitized.toLowerCase()];
+  if (expansions) {
+    for (const term of expansions) {
+      queries.push(term);
+      queries.push(`product_type:"${toProductTypeLabel(term)}"`);
+    }
   }
 
   return [...new Set(queries.filter(Boolean))].map((q) => storefrontQuery(q));
@@ -745,18 +822,33 @@ async function countProductsByFilter(
   category: string,
   options: ShopifyFetchOptions = {}
 ): Promise<{ count: number; precision: string }> {
-  const term = category.trim().replace(/["\\]/g, " ");
-  const slug = slugifyCategory(term);
-  const typeLabel = toProductTypeLabel(term);
-  // Prefer exact product_type / tags — avoid loose title* OR that over-counts.
-  const filter = [
-    `product_type:"${typeLabel}"`,
-    `product_type:"${term}"`,
-    `tag:"${term}"`,
-    slug ? `tag:${slug}` : null,
-  ]
-    .filter(Boolean)
-    .join(" OR ");
+  const terms = categoryAliasTerms(category);
+  if (terms.length === 0) {
+    return { count: 0, precision: "EXACT" };
+  }
+
+  const clauses: string[] = [];
+  for (const term of terms) {
+    const slug = slugifyCategory(term);
+    const typeLabel = toProductTypeLabel(term);
+    clauses.push(`product_type:"${typeLabel}"`);
+    clauses.push(`product_type:"${term}"`);
+    clauses.push(`tag:"${term}"`);
+    if (slug) clauses.push(`tag:${slug}`);
+
+    // Title tokens: "sauna shorts" → title:sauna AND title:shorts
+    const tokens = term
+      .split(/\s+/)
+      .map((t) => t.replace(/[^a-z0-9-]/gi, ""))
+      .filter((t) => t.length > 2);
+    if (tokens.length >= 2) {
+      clauses.push(`(${tokens.map((t) => `title:${t}`).join(" AND ")})`);
+    } else if (tokens.length === 1) {
+      clauses.push(`title:${tokens[0]}`);
+    }
+  }
+
+  const filter = [...new Set(clauses)].join(" OR ");
 
   const data = await shopifyAdminGraphql<ProductsCountData>(
     `query CountCategoryProducts($query: String!, $limit: Int) {
@@ -783,7 +875,54 @@ async function countProductsByFilter(
   };
 }
 
+/**
+ * Best-effort product count for a category name when the nav collection is empty
+ * or missing — tries productType, aliases (sauna↔sweat), tags, and title tokens.
+ */
+export async function estimateCategoryProductCount(
+  category: string,
+  options: ShopifyFetchOptions = {}
+): Promise<{ count: number; precision: string; source: string }> {
+  const cleaned = category.trim();
+  if (!cleaned) {
+    return { count: 0, precision: "EXACT", source: "none" };
+  }
+
+  for (const term of categoryAliasTerms(cleaned)) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    const byType = await countByProductType(term, options);
+    if (byType) {
+      return {
+        count: byType.count,
+        precision: byType.precision,
+        source: "product_type",
+      };
+    }
+  }
+
+  const filtered = await countProductsByFilter(cleaned, options);
+  if (filtered.count > 0) {
+    return {
+      count: filtered.count,
+      precision: filtered.precision,
+      source: "product_filter",
+    };
+  }
+
+  return { count: 0, precision: "EXACT", source: "none" };
+}
+
 const CATEGORY_LIST_LIMIT = 12;
+
+function resolveCategoryListLimit(options: ShopifyFetchOptions): number {
+  const requested = options.limit;
+  if (typeof requested === "number" && Number.isFinite(requested)) {
+    return Math.min(Math.max(Math.floor(requested), 1), MAX_RESULTS);
+  }
+  return CATEGORY_LIST_LIMIT;
+}
 
 /**
  * Look up a store category: exact productType, then collection, then tag filters.
@@ -796,6 +935,7 @@ export async function lookupCategory(
 ): Promise<CategoryLookupResult> {
   const cleaned = category.trim();
   const inStockOnly = Boolean(options.inStockOnly);
+  const listLimit = resolveCategoryListLimit(options);
   if (!cleaned) {
     return {
       category: "",
@@ -818,13 +958,13 @@ export async function lookupCategory(
   if (byType) {
     let products: ProductSummary[] = [];
     if (mode === "list") {
-      products = await listByProductType(byType.productType, CATEGORY_LIST_LIMIT, {
+      products = await listByProductType(byType.productType, listLimit, {
         ...options,
         inStockOnly,
       });
       // Fallback if listing fails but count succeeded (same productType).
-      if (products.length === 0 && matched) {
-        products = await listCollectionProducts(matched.id, CATEGORY_LIST_LIMIT, {
+      if (products.length === 0 && matched && matched.productsCount > 0) {
+        products = await listCollectionProducts(matched.id, listLimit, {
           ...options,
           inStockOnly,
         });
@@ -833,21 +973,21 @@ export async function lookupCategory(
       if (products.length === 0 && inStockOnly) {
         const unfiltered = await listByProductType(
           byType.productType,
-          CATEGORY_LIST_LIMIT,
+          listLimit,
           { ...options, inStockOnly: false }
         );
         products = unfiltered.filter(isProductInStock);
-        if (products.length === 0 && matched) {
+        if (products.length === 0 && matched && matched.productsCount > 0) {
           const fromCollection = await listCollectionProducts(
             matched.id,
-            CATEGORY_LIST_LIMIT,
+            listLimit,
             { ...options, inStockOnly: false }
           );
           products = fromCollection.filter(isProductInStock);
         }
       }
       if (products.length === 0 && !inStockOnly) {
-        products = await searchProducts(cleaned, CATEGORY_LIST_LIMIT, options);
+        products = await searchProductsWithAliases(cleaned, listLimit, options);
       }
     }
     return {
@@ -862,13 +1002,19 @@ export async function lookupCategory(
     };
   }
 
-  if (matched) {
+  // Non-empty collection match wins. Empty nav collections fall through —
+  // many stores leave subcategory collections empty while products exist
+  // under related titles/types (e.g. Sauna Shorts → Sweat Shorts).
+  if (matched && matched.productsCount > 0) {
     let products: ProductSummary[] = [];
     if (mode === "list") {
-      products = await listCollectionProducts(matched.id, CATEGORY_LIST_LIMIT, {
+      products = await listCollectionProducts(matched.id, listLimit, {
         ...options,
         inStockOnly,
       });
+      if (products.length === 0 && !inStockOnly) {
+        products = await searchProductsWithAliases(cleaned, listLimit, options);
+      }
     }
     return {
       category: cleaned,
@@ -882,29 +1028,75 @@ export async function lookupCategory(
     };
   }
 
+  // Try productType on aliases before the broad filter.
+  for (const alias of categoryAliasTerms(cleaned)) {
+    if (alias.toLowerCase() === cleaned.toLowerCase()) continue;
+    const aliasType = await countByProductType(alias, options);
+    if (!aliasType) continue;
+    let products: ProductSummary[] = [];
+    if (mode === "list") {
+      products = await listByProductType(aliasType.productType, listLimit, {
+        ...options,
+        inStockOnly,
+      });
+      if (products.length === 0 && !inStockOnly) {
+        products = await searchProductsWithAliases(cleaned, listLimit, options);
+      }
+    }
+    return {
+      category: cleaned,
+      matched,
+      productType: aliasType.productType,
+      source: "product_type",
+      totalProducts: aliasType.count,
+      precision: aliasType.precision,
+      products,
+      mode,
+    };
+  }
+
   const filtered = await countProductsByFilter(cleaned, options);
   let products: ProductSummary[] = [];
   if (mode === "list" && filtered.count > 0) {
-    const typeLabel = toProductTypeLabel(cleaned);
-    products = await listByProductType(typeLabel, CATEGORY_LIST_LIMIT, {
-      ...options,
-      inStockOnly,
-    });
-    if (products.length === 0 && !inStockOnly) {
-      products = await searchProducts(cleaned, CATEGORY_LIST_LIMIT, options);
-    }
+    products = await searchProductsWithAliases(cleaned, listLimit, options);
+  } else if (mode === "list" && filtered.count === 0) {
+    products = await searchProductsWithAliases(cleaned, listLimit, options);
   }
+
+  const totalProducts =
+    filtered.count > 0
+      ? filtered.count
+      : products.length > 0
+        ? products.length
+        : matched?.productsCount ?? 0;
 
   return {
     category: cleaned,
-    matched: null,
+    matched,
     productType: null,
-    source: filtered.count > 0 ? "product_filter" : "none",
-    totalProducts: filtered.count,
-    precision: filtered.precision,
+    source:
+      filtered.count > 0
+        ? "product_filter"
+        : products.length > 0
+          ? "product_filter"
+          : "none",
+    totalProducts,
+    precision: filtered.count > 0 ? filtered.precision : "AT_LEAST",
     products,
     mode,
   };
+}
+
+async function searchProductsWithAliases(
+  category: string,
+  limit: number,
+  options: ShopifyFetchOptions
+): Promise<ProductSummary[]> {
+  for (const term of categoryAliasTerms(category)) {
+    const found = await searchProducts(term, limit, options);
+    if (found.length > 0) return found;
+  }
+  return [];
 }
 
 interface CollectionProductsData {

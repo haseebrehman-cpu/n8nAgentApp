@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { categoryAliasTerms } from "@/lib/shopify";
 
 /**
  * Lightweight pure helpers mirrored from shopify category matching.
@@ -71,5 +72,19 @@ describe("category collection matching", () => {
     expect(toProductTypeLabel("BOXING GLOVES")).toBe("Boxing Gloves");
     expect(toProductTypeLabel("belt")).toBe("Belt");
     expect(toProductTypeLabel("belts")).toBe("Belts");
+  });
+});
+
+describe("categoryAliasTerms", () => {
+  it("maps sauna subcategories to sweat aliases", () => {
+    const shorts = categoryAliasTerms("Sauna Shorts");
+    expect(shorts).toContain("sauna shorts");
+    expect(shorts).toContain("sweat shorts");
+
+    const tees = categoryAliasTerms("Sauna T-Shirts");
+    expect(tees.some((t) => t.includes("sweat"))).toBe(true);
+
+    const vests = categoryAliasTerms("sauna vests");
+    expect(vests).toContain("sweat vest");
   });
 });

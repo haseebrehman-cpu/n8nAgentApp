@@ -28,6 +28,15 @@ export interface ShopifyConfig {
   storefrontUrl: string | null;
 }
 
+export interface ShopifyMcpConfig {
+  /** UCP catalog endpoint (search_catalog, lookup_catalog, get_product). */
+  ucpEndpoint: string;
+  /** Standard Storefront MCP endpoint (search_shop_policies_and_faqs). */
+  standardEndpoint: string;
+  /** UCP agent profile URL sent in every catalog request's `meta`. */
+  agentProfile: string;
+}
+
 export interface RedisConfig {
   /** Connection URL (`redis://` or `rediss://`). Null when unset (dev fallback). */
   url: string | null;
@@ -81,6 +90,27 @@ export function getShopifyConfig(): ShopifyConfig {
   const storefrontUrl = parseStorefrontUrl(process.env.SHOPIFY_STOREFRONT_URL);
 
   return { domain, accessToken, marketCountry, storefrontUrl };
+}
+
+/** Default UCP agent profile published by Shopify for catalog MCP requests. */
+const DEFAULT_MCP_AGENT_PROFILE =
+  "https://shopify.dev/ucp/agent-profiles/examples/2026-04-08/valid-with-capabilities.json";
+
+/**
+ * Endpoints for Shopify's hosted Storefront MCP servers. Derived from the same
+ * `SHOPIFY_STORE_DOMAIN` used for the Admin API. The endpoints are public and
+ * need no token; only the agent profile is configurable.
+ */
+export function getShopifyMcpConfig(): ShopifyMcpConfig {
+  const { domain } = getShopifyConfig();
+  const agentProfile =
+    process.env.SHOPIFY_MCP_AGENT_PROFILE?.trim() || DEFAULT_MCP_AGENT_PROFILE;
+
+  return {
+    ucpEndpoint: `https://${domain}/api/ucp/mcp`,
+    standardEndpoint: `https://${domain}/api/mcp`,
+    agentProfile,
+  };
 }
 
 /** Validate and normalize a public storefront origin (no trailing slash). */

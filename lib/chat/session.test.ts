@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendAssistantMessage,
   appendUserMessage,
+  MAX_HISTORY_MESSAGES,
   resetConversationState,
   setConversationState,
   type ChatSession,
@@ -15,6 +16,10 @@ function makeSession(): ChatSession {
     pendingOrderNumber: null,
     pendingCategory: null,
     updatedAt: Date.now(),
+    intent: null,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
   };
 }
 
@@ -31,11 +36,11 @@ describe("chat session state machine", () => {
 
   it("trims history when appending", () => {
     const session = makeSession();
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < MAX_HISTORY_MESSAGES + 10; i++) {
       appendUserMessage(session, `u${i}`);
       appendAssistantMessage(session, `a${i}`);
     }
-    expect(session.messages.length).toBeLessThanOrEqual(12);
+    expect(session.messages.length).toBeLessThanOrEqual(MAX_HISTORY_MESSAGES);
     expect(session.messages.at(-1)?.role).toBe("assistant");
   });
 });

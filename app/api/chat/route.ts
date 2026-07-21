@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runChatAgent } from "@/lib/chat-agent";
+import { markChatInactive } from "@/lib/chat/persist-mongo";
 import {
   appendUserMessage,
   getOrCreateSession,
@@ -132,12 +133,21 @@ export async function POST(req: NextRequest) {
       ? (body as { region?: unknown }).region
       : undefined
   );
+  const forceNew =
+    typeof body === "object" &&
+    body !== null &&
+    (body as { newSession?: unknown }).newSession === true;
   const stream = wantsStream(req, body);
 
   const cookieName = getSessionCookieName();
-  const { session, isNew } = await getOrCreateSession(
-    req.cookies.get(cookieName)?.value
+  const { session, isNew, previousSessionId } = await getOrCreateSession(
+    req.cookies.get(cookieName)?.value,
+    { forceNew },
   );
+
+  if (previousSessionId) {
+    void markChatInactive(previousSessionId);
+  }
 
   appendUserMessage(session, userMessage);
 
@@ -145,6 +155,7 @@ export async function POST(req: NextRequest) {
     requestId,
     session: shortSessionId(session.id),
     isNew,
+    forceNew,
     state: session.state,
     stream,
   });

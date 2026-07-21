@@ -25,6 +25,8 @@ async function dbConnect() {
   if (!cached.promise) {
     cached.promise = mongoose.connect(MONGODB_URL, {
       bufferCommands: false,
+      // Prefer explicit db so Atlas does not fall back to the default `test` database.
+      dbName: process.env.MONGO_DB_NAME || "main",
     });
   }
 

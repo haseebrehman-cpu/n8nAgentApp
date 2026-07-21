@@ -21,10 +21,12 @@ import {
 } from "@/lib/chatbot/orderTracking";
 import type { ChatSession, ConversationState } from "@/lib/chat/session";
 import {
+  addTokenUsage,
   appendAssistantMessage,
   resetConversationState,
   setConversationState,
   setPendingCategory,
+  setSessionIntent,
 } from "@/lib/chat/session";
 import { getOpenAIConfig, isConfigError } from "@/lib/config";
 import { logger } from "@/lib/logger";
@@ -1105,6 +1107,57 @@ function finishWithReply(
   return cleaned;
 }
 
+/** Stable intent labels persisted on the session / Mongo chat document. */
+function resolveTurnIntent(
+  lastUser: string,
+  session: ChatSession,
+  flags?: {
+    wantsDiscounts?: boolean;
+    wantsCatalogCount?: boolean;
+    structureIntent?: boolean;
+    categoryIntent?: boolean;
+    productIntent?: boolean;
+  },
+): string {
+  if (
+    session.state === "awaiting_order_email" ||
+    session.state === "awaiting_order_number"
+  ) {
+    return "order_tracking";
+  }
+  if (isOrderTrackingIntent(lastUser) || extractOrderLookupToken(lastUser)) {
+    return "order_tracking";
+  }
+  if (isDiscountCodeQuery(lastUser)) return "discount_code";
+  if (flags?.wantsDiscounts || isDiscountQuery(lastUser)) return "discount";
+  if (flags?.wantsCatalogCount || isCatalogCountQuery(lastUser)) {
+    return "catalog_count";
+  }
+  if (flags?.structureIntent || extractCategoryStructureIntent(lastUser)) {
+    return "category_browse";
+  }
+  if (
+    flags?.categoryIntent ||
+    extractCategoryIntent(lastUser) ||
+    isCategoryFollowUpQuery(lastUser)
+  ) {
+    return "category_lookup";
+  }
+  if (/^product information$/i.test(lastUser.trim())) {
+    return "product_information";
+  }
+  if (
+    flags?.productIntent ||
+    shouldForceProductSearch(lastUser) ||
+    isProductFollowUpQuery(lastUser) ||
+    isNamedProductSaleQuery(lastUser)
+  ) {
+    return "product_information";
+  }
+  if (isOffTopicQuery(lastUser)) return "off_topic";
+  return "general";
+}
+
 /**
  * Run the agent using the server session (authoritative history + state).
  * Mutates session messages/state; caller must persist.
@@ -1122,11 +1175,13 @@ export async function runChatAgent(
     [...history].reverse().find((m) => m.role === "user")?.content ?? "";
 
   if (isDiscountCodeQuery(lastUser)) {
+    setSessionIntent(session, "discount_code");
     return finishWithReply(session, DISCOUNT_CODE_REPLY);
   }
 
   // --- Explicit conversation state machine (not regex on assistant text) ---
   if (session.state === "awaiting_order_email") {
+    setSessionIntent(session, "order_tracking");
     const email = extractEmailFromText(lastUser) ?? normalizeEmail(lastUser);
     const orderNumber = session.pendingOrderNumber;
     if (email && orderNumber) {
@@ -1147,6 +1202,7 @@ export async function runChatAgent(
   }
 
   if (session.state === "awaiting_order_number") {
+    setSessionIntent(session, "order_tracking");
     if (isValidOrderNumberInput(lastUser)) {
       const orderNumber = normalizeOrderNumber(lastUser)!;
       const email = extractEmailFromText(lastUser);
@@ -1179,6 +1235,7 @@ export async function runChatAgent(
   }
 
   if (isOrderTrackingIntent(lastUser)) {
+    setSessionIntent(session, "order_tracking");
     const embedded = extractOrderNumberFromText(lastUser);
     const email = extractEmailFromText(lastUser);
     const withoutIntent = stripOrderTrackingPhrases(lastUser);
@@ -1228,6 +1285,7 @@ export async function runChatAgent(
   // Bare order number (or "find/check 1001") → collect email for tracking
   const orderLookupToken = extractOrderLookupToken(lastUser);
   if (orderLookupToken) {
+    setSessionIntent(session, "order_tracking");
     const email = extractEmailFromText(lastUser);
     if (email) {
       const reply = await lookupOrderReply(orderLookupToken, email, { region, signal });
@@ -1247,6 +1305,7 @@ export async function runChatAgent(
     !isProductFollowUpQuery(lastUser) &&
     !hasRecentProductContext(history)
   ) {
+    setSessionIntent(session, "off_topic");
     return finishWithReply(session, OFF_TOPIC_REPLY);
   }
 
@@ -1290,6 +1349,17 @@ export async function runChatAgent(
     Boolean(structureIntent) ||
     Boolean(categoryIntent) ||
     (isFollowUp && hasRecentProductContext(history));
+
+  setSessionIntent(
+    session,
+    resolveTurnIntent(lastUser, session, {
+      wantsDiscounts,
+      wantsCatalogCount,
+      structureIntent: Boolean(structureIntent),
+      categoryIntent: Boolean(categoryIntent),
+      productIntent,
+    }),
+  );
 
   const conversation: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -1345,11 +1415,16 @@ export async function runChatAgent(
     );
 
     if (completion.usage) {
+      addTokenUsage(session, completion.usage);
       logger.info("chat-agent", "openai usage", {
         requestId,
         promptTokens: completion.usage.prompt_tokens,
         completionTokens: completion.usage.completion_tokens,
         totalTokens: completion.usage.total_tokens,
+        sessionPromptTokens: session.promptTokens,
+        sessionCompletionTokens: session.completionTokens,
+        sessionTotalTokens: session.totalTokens,
+        intent: session.intent,
         model,
       });
     }

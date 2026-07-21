@@ -114,12 +114,18 @@ export default function ChatWidget() {
   const inputRef = useRef<HTMLInputElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** First API message after a fresh UI / "New chat" rotates the server session. */
+  const startNewSessionRef = useRef(true);
   const panelId = "chat-widget-panel";
 
   useEffect(() => {
     const stored = loadStoredMessages();
     startTransition(() => {
-      if (stored.length > 0) setMessages(stored);
+      if (stored.length > 0) {
+        setMessages(stored);
+        // Only resume the cookie session if this tab already had a real conversation.
+        startNewSessionRef.current = !stored.some((m) => m.role === "user");
+      }
       setHydrated(true);
     });
   }, []);
@@ -180,6 +186,26 @@ export default function ChatWidget() {
       }
       return !open;
     });
+  }
+
+  function startNewChat() {
+    abortRef.current?.abort();
+    setIsTyping(false);
+    startNewSessionRef.current = true;
+    setMessages([
+      {
+        id: nextId(),
+        role: "assistant",
+        content: WELCOME_MESSAGE,
+        showMenu: true,
+      },
+    ]);
+    try {
+      window.sessionStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    inputRef.current?.focus();
   }
 
   function pushAssistant(content: string, showMenu = false) {
@@ -266,6 +292,9 @@ export default function ChatWidget() {
       );
     };
 
+    const newSession = startNewSessionRef.current;
+    startNewSessionRef.current = false;
+
     try {
       const res = await fetch("/api/chat?stream=1", {
         method: "POST",
@@ -275,7 +304,7 @@ export default function ChatWidget() {
         },
         credentials: "same-origin",
         signal: ac.signal,
-        body: JSON.stringify({ message: trimmed, stream: true }),
+        body: JSON.stringify({ message: trimmed, stream: true, newSession }),
       });
 
       if (!res.ok) {
@@ -428,7 +457,7 @@ export default function ChatWidget() {
           className="fixed bottom-24 right-5 z-50 flex h-[600px] max-h-[calc(100vh-7rem)] w-[380px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
         >
           <div className="flex items-center gap-3 bg-indigo-600 px-4 py-3.5 text-white">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -444,7 +473,7 @@ export default function ChatWidget() {
                 />
               </svg>
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">
                 {STORE_NAME} Assistant
               </p>
@@ -453,6 +482,14 @@ export default function ChatWidget() {
                 Online — we typically reply instantly
               </p>
             </div>
+            <button
+              type="button"
+              onClick={startNewChat}
+              disabled={isTyping}
+              className="shrink-0 rounded-full border border-white/30 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-white/10 disabled:opacity-50"
+            >
+              New chat
+            </button>
           </div>
 
           <div

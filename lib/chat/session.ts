@@ -18,6 +18,12 @@ export type ConversationState =
 export interface ChatSession {
   id: string;
   messages: ChatMessagePayload[];
+  /** Latest classified turn intent (e.g. product_information, order_tracking). */
+  intent: string | null;
+  /** Cumulative OpenAI usage for this session. */
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
   state: ConversationState;
   /** Pending order number while awaiting email verification. */
   pendingOrderNumber: string | null;
@@ -27,11 +33,14 @@ export interface ChatSession {
 }
 
 const SESSION_TTL_SECONDS = 60 * 60 * 4; // 4 hours
-const MAX_HISTORY_MESSAGES = 12;
+/** Live agent/Redis context window — Mongo keeps the full transcript via appends. */
+const MAX_HISTORY_MESSAGES = 50;
 const MAX_MESSAGE_CHARS = 2_000;
 const COOKIE_NAME = "chat_session";
 
 const memorySessions = new Map<string, ChatSession>();
+/** Request-scoped messages to append to Mongo (not stored in Redis). */
+const pendingMongoBySession = new WeakMap<ChatSession, ChatMessagePayload[]>();
 
 function sessionRedisKey(id: string): string {
   return redisKey("chat", "session", id);
@@ -45,6 +54,21 @@ function trimHistory(messages: ChatMessagePayload[]): ChatMessagePayload[] {
   return trimmed;
 }
 
+function queueMongoMessage(
+  session: ChatSession,
+  message: ChatMessagePayload,
+): void {
+  const pending = pendingMongoBySession.get(session) ?? [];
+  pending.push(message);
+  pendingMongoBySession.set(session, pending);
+}
+
+function takePendingMongoMessages(session: ChatSession): ChatMessagePayload[] {
+  const pending = pendingMongoBySession.get(session) ?? [];
+  pendingMongoBySession.delete(session);
+  return pending;
+}
+
 function emptySession(id: string): ChatSession {
   return {
     id,
@@ -53,7 +77,16 @@ function emptySession(id: string): ChatSession {
     pendingOrderNumber: null,
     pendingCategory: null,
     updatedAt: Date.now(),
+    intent: null,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
   };
+}
+
+function asNonNegativeInt(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 async function loadSession(id: string): Promise<ChatSession | null> {
@@ -71,6 +104,10 @@ async function loadSession(id: string): Promise<ChatSession | null> {
         pendingOrderNumber: parsed.pendingOrderNumber ?? null,
         pendingCategory: parsed.pendingCategory ?? null,
         updatedAt: parsed.updatedAt ?? Date.now(),
+        intent: parsed.intent ?? null,
+        promptTokens: asNonNegativeInt(parsed.promptTokens),
+        completionTokens: asNonNegativeInt(parsed.completionTokens),
+        totalTokens: asNonNegativeInt(parsed.totalTokens),
       };
     } catch {
       return null;
@@ -108,35 +145,68 @@ async function persistSession(session: ChatSession): Promise<void> {
   memorySessions.set(session.id, session);
 }
 
+async function deleteSession(id: string): Promise<void> {
+  const redis = await getRedis();
+  if (redis) {
+    try {
+      await redis.del(sessionRedisKey(id));
+    } catch {
+      // ignore — best-effort cleanup
+    }
+  }
+  memorySessions.delete(id);
+}
+
 export function getSessionCookieName(): string {
   return COOKIE_NAME;
 }
 
+export type GetOrCreateSessionResult = {
+  session: ChatSession;
+  isNew: boolean;
+  /** Prior cookie session id when a new conversation was forced. */
+  previousSessionId?: string;
+};
+
 /** Create or load a session from cookie value. */
 export async function getOrCreateSession(
   cookieValue: string | undefined,
-): Promise<{ session: ChatSession; isNew: boolean }> {
+  options?: { forceNew?: boolean },
+): Promise<GetOrCreateSessionResult> {
+  if (options?.forceNew) {
+    if (cookieValue) await deleteSession(cookieValue);
+    const session = emptySession(randomUUID());
+    await persistSession(session);
+    return {
+      session,
+      isNew: true,
+      previousSessionId: cookieValue || undefined,
+    };
+  }
+
   if (cookieValue) {
     const existing = await loadSession(cookieValue);
     if (existing) return { session: existing, isNew: false };
   }
 
-  const id = randomUUID();
-  const session = emptySession(id);
+  const session = emptySession(randomUUID());
   await persistSession(session);
   return { session, isNew: true };
 }
 
 export async function saveSession(session: ChatSession): Promise<void> {
+  const pendingMongo = takePendingMongoMessages(session);
   await persistSession(session);
-  await persistChatToMongo(session);
+  await persistChatToMongo(session, pendingMongo);
 }
 
 export function appendUserMessage(session: ChatSession, content: string): void {
-  session.messages.push({
+  const message: ChatMessagePayload = {
     role: "user",
     content: content.slice(0, MAX_MESSAGE_CHARS),
-  });
+  };
+  queueMongoMessage(session, message);
+  session.messages.push(message);
   session.messages = trimHistory(session.messages);
 }
 
@@ -144,10 +214,12 @@ export function appendAssistantMessage(
   session: ChatSession,
   content: string,
 ): void {
-  session.messages.push({
+  const message: ChatMessagePayload = {
     role: "assistant",
     content: content.slice(0, MAX_MESSAGE_CHARS),
-  });
+  };
+  queueMongoMessage(session, message);
+  session.messages.push(message);
   session.messages = trimHistory(session.messages);
 }
 
@@ -159,6 +231,30 @@ export function setConversationState(
   session.state = state;
   session.pendingOrderNumber =
     state === "awaiting_order_email" ? pendingOrderNumber : null;
+}
+
+/** Set the latest turn intent without clearing conversation state. */
+export function setSessionIntent(session: ChatSession, intent: string): void {
+  const trimmed = intent.trim();
+  if (trimmed) session.intent = trimmed;
+}
+
+/** Accumulate OpenAI usage onto the session totals. */
+export function addTokenUsage(
+  session: ChatSession,
+  usage: {
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    total_tokens?: number | null;
+  },
+): void {
+  const prompt = asNonNegativeInt(usage.prompt_tokens);
+  const completion = asNonNegativeInt(usage.completion_tokens);
+  const total = asNonNegativeInt(usage.total_tokens) || prompt + completion;
+  session.promptTokens = asNonNegativeInt(session.promptTokens) + prompt;
+  session.completionTokens =
+    asNonNegativeInt(session.completionTokens) + completion;
+  session.totalTokens = asNonNegativeInt(session.totalTokens) + total;
 }
 
 export function resetConversationState(session: ChatSession): void {

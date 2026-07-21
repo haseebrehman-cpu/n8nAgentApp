@@ -51,6 +51,9 @@ describe("shouldForceProductSearch", () => {
       true
     );
     expect(shouldForceProductSearch("boxing gloves")).toBe(true);
+    expect(shouldForceProductSearch("how many products in sauna vests")).toBe(
+      true
+    );
   });
 
   it("does not force search for tracking, off-topic, or bare order numbers", () => {
@@ -80,6 +83,8 @@ describe("isOffTopicQuery", () => {
     expect(isOffTopicQuery("track this order")).toBe(false);
     expect(isOffTopicQuery("boxing gloves")).toBe(false);
     expect(isOffTopicQuery("what is your return policy")).toBe(false);
+    expect(isOffTopicQuery("how many products in sauna vests")).toBe(false);
+    expect(isOffTopicQuery("how many boxing gloves")).toBe(false);
   });
 
   it("does not flag product follow-ups as off-topic", () => {

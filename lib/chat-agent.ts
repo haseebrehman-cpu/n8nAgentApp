@@ -29,6 +29,12 @@ import {
 import { getOpenAIConfig, isConfigError } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { stripAssistantMedia } from "@/lib/sanitize";
+import { compactCatalogMcpText } from "@/lib/shopify/compact-catalog";
+import {
+  fetchCollectionProductsRaw,
+  isCategoryStyleQuery,
+  resolveCollectionForQuery,
+} from "@/lib/shopify/collections";
 import {
   getProduct,
   lookupCatalog,
@@ -48,6 +54,12 @@ const LARGE_LIST_COMPLETION_TOKENS = 4_000;
 /** Tool payload size (chars) above which we assume a long list is coming back. */
 const LARGE_PAYLOAD_CHARS = 1_500;
 const SEARCH_RESULT_LIMIT = 10;
+/** Page size when answering "how many" / total counts for any category. */
+const COUNT_SEARCH_LIMIT = 50;
+/** Safety cap on paginated count fetches. */
+const MAX_COUNT_PAGES = 5;
+/** How many product rows to keep in the tool payload after a full count. */
+const COUNT_PAYLOAD_PRODUCTS = 10;
 
 const FALLBACK_REPLY =
   "I'm sorry, I couldn't complete that request. Could you rephrase it or try again?";
@@ -80,13 +92,32 @@ const CATALOG_TOOLS = new Set([
   "lookup_catalog",
 ]);
 
+/** Common single-word typos → intended browse terms (applied before search). */
+const QUERY_TYPO_MAP: Record<string, string> = {
+  bosing: "boxing",
+  boxng: "boxing",
+  boxin: "boxing",
+  boxnig: "boxing",
+  glovse: "gloves",
+  glooves: "gloves",
+};
+
+/** Soft-correct obvious single-token typos; leave multi-word queries alone. */
+export function normalizeSearchQuery(query: string): string {
+  const trimmed = query.trim().replace(/\s+/g, " ");
+  if (!trimmed) return trimmed;
+  const lower = trimmed.toLowerCase();
+  if (QUERY_TYPO_MAP[lower]) return QUERY_TYPO_MAP[lower];
+  return trimmed;
+}
+
 const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
       name: "search_catalog",
       description:
-        "Search the store's product catalog for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use this for product discovery, browsing, listing, category questions, and finding a specific product. Prefer concise queries (e.g. 'boxing gloves', 'sauna suit', 'products on sale'). Do NOT use this for policy, shipping, or order-tracking questions.",
+        "Search the store's product catalog for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use when the customer asks to list/show products, asks how many, names a specific product, or has already clarified a broad category. Prefer concise queries (e.g. 'training boxing gloves', 'sauna vest', 'products on sale'). For bare ambiguous terms like 'boxing' or 'gloves', do NOT search yet — ask one clarifying question first. Do NOT use this for policy, shipping, or order-tracking questions.",
       parameters: {
         type: "object",
         properties: {
@@ -97,7 +128,18 @@ const tools: ChatCompletionTool[] = [
           },
           limit: {
             type: "number",
-            description: "Optional max number of products to return (caps at 50).",
+            description:
+              "Optional max number of products to return (caps at 50). For any 'how many' / total count question, pass 50 (the server also auto-paginates counts for every category).",
+          },
+          availableOnly: {
+            type: "boolean",
+            description:
+              "When true (default for browse, list, and how-many counts), only return products available for sale / in stock. Set false only when the customer explicitly wants out-of-stock or discontinued items included.",
+          },
+          forCount: {
+            type: "boolean",
+            description:
+              "Set true for any explicit count question ('how many X', 'total X products') across every category. Triggers a higher limit and pagination so productCount is not capped at the default page size. Counts use the same in-stock default as browse unless availableOnly is false.",
           },
         },
         required: ["query"],
@@ -329,12 +371,13 @@ export function isOffTopicQuery(text: string): boolean {
     return true;
   }
 
-  // Standalone trivia-style "what is X" — not product follow-ups or shopping terms
+  // Standalone trivia-style "what is X" — not product follow-ups or shopping terms.
+  // Note: use products? so "how many products…" is never treated as off-topic.
   if (
     /^(what(?:'s|\s+is)|who(?:'s|\s+is)|where(?:'s|\s+is)|when(?:'s|\s+is)|why(?:'s|\s+is)|how\s+(?:do|does|did|can|many|much)\b)/i.test(
       t
     ) &&
-    !/\b(product|price|cost|size|stock|colour|color|order|shipping|delivery|discount|sale|buy|gloves|guard|kit|bundle|boxing|mma|store|available|difference|different|compare|versus|\bvs\b|better|which|policy|policies|return|refund)\b/i.test(
+    !/\b(products?|items?|price|cost|size|stock|colour|color|order|shipping|delivery|discount|sale|buy|gloves?|vests?|suits?|guards?|mats?|wraps?|bags?|belts?|shin|sauna|sweat|kit|bundle|boxing|mma|store|available|difference|different|compare|versus|\bvs\b|better|which|policy|policies|return|refund)\b/i.test(
       t
     )
   ) {
@@ -466,29 +509,216 @@ export function shouldForceProductSearch(text: string): boolean {
   return false;
 }
 
+/** True when the shopper is asking for a category/product count (any category). */
+export function isCatalogCountQuery(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  return (
+    /\bhow\s+many\b/i.test(t) ||
+    /\bnumber\s+of\b/i.test(t) ||
+    /\bcount\s+of\b/i.test(t)
+  );
+}
+
+function paginationCursor(pag: Record<string, unknown> | undefined): string | null {
+  if (!pag) return null;
+  for (const key of ["next_cursor", "cursor", "end_cursor", "nextCursor", "endCursor"]) {
+    const value = pag[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/**
+ * Fetch search pages until exhausted (or safety cap). Used for "how many"
+ * answers so productCount is not stuck at the default page size — any category.
+ */
+async function searchCatalogForCount(
+  query: string,
+  availableOnly: boolean,
+  options: { signal?: AbortSignal }
+): Promise<{ raw: string; exhausted: boolean }> {
+  const merged: unknown[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  let exhausted = true;
+  let lastMessages: unknown[] | undefined;
+  let lastNotFound: unknown[] | undefined;
+
+  for (let page = 0; page < MAX_COUNT_PAGES; page++) {
+    const data = await searchCatalog(
+      {
+        query,
+        pagination: cursor
+          ? { limit: COUNT_SEARCH_LIMIT, cursor }
+          : { limit: COUNT_SEARCH_LIMIT },
+        filters: { available: availableOnly },
+      },
+      { signal: options.signal }
+    );
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return { raw: data, exhausted: false };
+    }
+
+    const products = Array.isArray(parsed.products) ? parsed.products : [];
+    for (const product of products) {
+      if (!product || typeof product !== "object") continue;
+      const id = String((product as { id?: unknown }).id ?? "").trim();
+      const key = id || JSON.stringify(product);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(product);
+    }
+
+    if (Array.isArray(parsed.messages)) lastMessages = parsed.messages;
+    if (Array.isArray(parsed.not_found)) lastNotFound = parsed.not_found;
+
+    const pag =
+      parsed.pagination && typeof parsed.pagination === "object"
+        ? (parsed.pagination as Record<string, unknown>)
+        : undefined;
+    const hasMore = Boolean(pag?.has_next_page);
+    const next = paginationCursor(pag);
+    if (!hasMore || !next) {
+      exhausted = true;
+      break;
+    }
+    if (page === MAX_COUNT_PAGES - 1) {
+      exhausted = false;
+      break;
+    }
+    cursor = next;
+  }
+
+  const payload: Record<string, unknown> = {
+    products: merged,
+    pagination: { has_next_page: !exhausted },
+  };
+  if (lastMessages?.length) payload.messages = lastMessages;
+  if (lastNotFound?.length) payload.not_found = lastNotFound;
+  return { raw: JSON.stringify(payload), exhausted };
+}
+
 async function runTool(
   name: string,
   args: Record<string, unknown>,
-  options: { region?: ShopifyStoreRegion; signal?: AbortSignal }
+  options: {
+    region?: ShopifyStoreRegion;
+    signal?: AbortSignal;
+    lastUser?: string;
+  }
 ): Promise<string> {
   try {
     if (name === "search_catalog") {
-      const query = String(args.query ?? "").trim();
+      const query = normalizeSearchQuery(String(args.query ?? ""));
       if (!query) return JSON.stringify({ error: "query is required" });
+
+      const counting =
+        args.forCount === true ||
+        args.forCount === "true" ||
+        isCatalogCountQuery(options.lastUser ?? "") ||
+        isCatalogCountQuery(query);
 
       const limitRaw = Number(args.limit);
       const limit =
         Number.isFinite(limitRaw) && limitRaw > 0
           ? Math.min(Math.floor(limitRaw), 50)
-          : SEARCH_RESULT_LIMIT;
+          : counting
+            ? COUNT_SEARCH_LIMIT
+            : SEARCH_RESULT_LIMIT;
+
+      // Browse/list default to in-stock. Collection category totals match the
+      // storefront category page (all products) unless the shopper asked
+      // in-stock only. Explicit availableOnly from the model always wins.
+      const availableOnly =
+        args.availableOnly === false || args.availableOnly === "false"
+          ? false
+          : true;
+
+      const wantInStockOnly = /\b(in\s+stock|available\s+only)\b/i.test(
+        options.lastUser ?? ""
+      );
+
+      // Category pages (Competition Gloves, Sauna Vests, …) — exact collection
+      // totals beat free-text search, which misses products whose titles omit
+      // the category words (e.g. "Fight Gloves" in Competition Gloves).
+      const tryCollection =
+        (counting || isCategoryStyleQuery(query)) &&
+        isCategoryStyleQuery(query);
+
+      if (tryCollection) {
+        try {
+          const resolved = await resolveCollectionForQuery(query, {
+            signal: options.signal,
+            region: options.region,
+          });
+          if (resolved) {
+            // Match storefront "N PRODUCTS" on the category page by default.
+            const collectionAvailableOnly = wantInStockOnly
+              ? true
+              : counting
+                ? false
+                : availableOnly;
+
+            const raw = await fetchCollectionProductsRaw(resolved.handle, {
+              signal: options.signal,
+              region: options.region,
+              availableOnly: collectionAvailableOnly,
+              collectionTitle: resolved.title,
+            });
+            return wrapMcpResult(
+              compactCatalogMcpText(raw, {
+                query,
+                skipRelevanceFilter: true,
+                exhaustedSearch: true,
+                maxProductsInPayload: counting
+                  ? COUNT_PAYLOAD_PRODUCTS
+                  : undefined,
+              }),
+              counting
+                ? `COLLECTION COUNT (every category): productCount is the storefront collection total for "${resolved.title}" (${resolved.handle}) — use THAT number for 'how many'. This matches the category page product count. Do NOT list products unless asked. Never invent products or stock.`
+                : `COLLECTION RESULTS: products from the storefront collection "${resolved.title}". productCount is the collection size returned. Prefer these over free-text guesses. Reply with PRODUCT LIST / COMPACT LIST when they asked to see items; otherwise clarify. Never invent products or stock.`
+            );
+          }
+        } catch (err) {
+          logger.warn("chat-agent", "collection resolve failed; falling back to search", {
+            query,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (counting) {
+        const { raw, exhausted } = await searchCatalogForCount(
+          query,
+          wantInStockOnly ? true : availableOnly,
+          { signal: options.signal }
+        );
+        return wrapMcpResult(
+          compactCatalogMcpText(raw, {
+            query,
+            exhaustedSearch: exhausted,
+            maxProductsInPayload: COUNT_PAYLOAD_PRODUCTS,
+          }),
+          "COUNT MODE (every category): productCount is the title-filtered total across paginated search results — use THAT number for any 'how many' / total answer (gloves, vests, guards, mats, etc.). Do NOT use the default page size (10) or productsShown as the total. If countIsExactCategoryTotal is true, state the number confidently. If hasMore is true, say you found at least productCount matching items. Do NOT list products unless they asked to see them. Never invent products or stock."
+        );
+      }
 
       const data = await searchCatalog(
-        { query, pagination: { limit } },
+        {
+          query,
+          pagination: { limit },
+          filters: { available: availableOnly },
+        },
         { signal: options.signal }
       );
       return wrapMcpResult(
-        data,
-        "These are live catalog search results from the store. Use ONLY these products, prices, stock, and links — never invent items. If it is empty, do not give a blunt 'not found': ask a natural clarifying question or offer related options, and you may retry with different keywords. When listing many products, include every one returned."
+        compactCatalogMcpText(data, { query }),
+        "Live search results (compacted + title-filtered for EVERY query). productCount is how many returned titles match the product kind in the query (last meaningful word: vest, glove, suit, mat, wrap, guard, bag, etc.) — use THAT number ONLY when they explicitly asked 'how many' (prefer forCount/limit 50 so counts are not capped). Do NOT count unrelated hits that were dropped. This is NOT a guaranteed full-catalog category total if hasMore is true. Never invent products or stock. Reply using the professional layouts from the system prompt: COUNT REPLY only for explicit how-many; PRODUCT LIST / COMPACT LIST only when they asked to see/list items or intent is specific enough; never volunteer a count for a vague browse. Keep structure clean — no messy one-line dumps."
       );
     }
 
@@ -498,8 +728,8 @@ async function runTool(
 
       const data = await getProduct({ id }, { signal: options.signal });
       return wrapMcpResult(
-        data,
-        "Full details for this product. Use ONLY these facts (price, variants, availability, link). Never invent details."
+        compactCatalogMcpText(data),
+        "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. Never invent details."
       );
     }
 
@@ -511,8 +741,8 @@ async function runTool(
 
       const data = await lookupCatalog({ ids }, { signal: options.signal });
       return wrapMcpResult(
-        data,
-        "Products/variants resolved by id. Use ONLY these facts. Never invent details."
+        compactCatalogMcpText(data),
+        "Products/variants resolved by id (compacted). Use ONLY these facts. Never invent details."
       );
     }
 
@@ -881,7 +1111,11 @@ export async function runChatAgent(
         // empty args
       }
 
-      const result = await runTool(toolCall.function.name, args, { region, signal });
+      const result = await runTool(toolCall.function.name, args, {
+        region,
+        signal,
+        lastUser,
+      });
 
       if (toolCall.function.name === "track_order") {
         try {

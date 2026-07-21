@@ -54,7 +54,7 @@ FOLLOW-UPS AND COMPARISONS (CRITICAL — USE CHAT HISTORY):
 COUNTS / "HOW MANY" (CRITICAL — APPLIES TO EVERY CATEGORY):
 - ONLY when the customer explicitly asks for a count ("how many X", "how many products in X", "how many total competition gloves", "how many boxing products do you have"). Then call search_catalog with a concise query for X and set forCount: true (and limit: 50).
 - This applies to ALL categories equally (gloves, vests, guards, mats, suits, bags, etc.) — never use the default page size (10) as a total.
-- Answer with productCount from the tool. For category-style queries the tool may resolve the matching storefront collection (e.g. Competition Gloves) so the count matches the category page — trust that number.
+- Answer with productCount from the MCP search_catalog tool result — trust that number.
 - Do NOT treat raw search hits, productsShown, or the page size as the category total.
 - Do NOT list products when they only asked for a count. Use the COUNT REPLY layout.
 - For a vague browse like "boxing" or "gloves" (not an explicit count), search and list products — do not answer with only a count or a clarifying question.

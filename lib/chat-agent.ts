@@ -31,11 +31,6 @@ import { logger } from "@/lib/logger";
 import { stripAssistantMedia } from "@/lib/sanitize";
 import { compactCatalogMcpText } from "@/lib/shopify/compact-catalog";
 import {
-  fetchCollectionProductsRaw,
-  isCategoryStyleQuery,
-  resolveCollectionForQuery,
-} from "@/lib/shopify/collections";
-import {
   getProduct,
   lookupCatalog,
   searchCatalog,
@@ -731,9 +726,8 @@ async function runTool(
             ? COUNT_SEARCH_LIMIT
             : SEARCH_RESULT_LIMIT;
 
-      // Browse/list default to in-stock. Collection category totals match the
-      // storefront category page (all products) unless the shopper asked
-      // in-stock only. Explicit availableOnly from the model always wins.
+      // Browse/list default to in-stock. Explicit availableOnly from the model
+      // always wins. All product catalog work goes through Shopify MCP tools.
       const availableOnly =
         args.availableOnly === false || args.availableOnly === "false"
           ? false
@@ -742,55 +736,6 @@ async function runTool(
       const wantInStockOnly = /\b(in\s+stock|available\s+only)\b/i.test(
         options.lastUser ?? ""
       );
-
-      // Category pages (Competition Gloves, Sauna Vests, …) — exact collection
-      // totals beat free-text search, which misses products whose titles omit
-      // the category words (e.g. "Fight Gloves" in Competition Gloves).
-      const tryCollection =
-        (counting || isCategoryStyleQuery(query)) &&
-        isCategoryStyleQuery(query);
-
-      if (tryCollection) {
-        try {
-          const resolved = await resolveCollectionForQuery(query, {
-            signal: options.signal,
-            region: options.region,
-          });
-          if (resolved) {
-            // Match storefront "N PRODUCTS" on the category page by default.
-            const collectionAvailableOnly = wantInStockOnly
-              ? true
-              : counting
-                ? false
-                : availableOnly;
-
-            const raw = await fetchCollectionProductsRaw(resolved.handle, {
-              signal: options.signal,
-              region: options.region,
-              availableOnly: collectionAvailableOnly,
-              collectionTitle: resolved.title,
-            });
-            return wrapMcpResult(
-              compactCatalogMcpText(raw, {
-                query,
-                skipRelevanceFilter: true,
-                exhaustedSearch: true,
-                maxProductsInPayload: counting
-                  ? COUNT_PAYLOAD_PRODUCTS
-                  : undefined,
-              }),
-              counting
-                ? `COLLECTION COUNT (every category): productCount is the storefront collection total for "${resolved.title}" (${resolved.handle}) — use THAT number for 'how many'. This matches the category page product count. Do NOT list products unless asked. Never invent products or stock.`
-                : `COLLECTION RESULTS: products from the storefront collection "${resolved.title}". productCount is the collection size returned. Prefer these over free-text guesses. Reply with PRODUCT LIST / COMPACT LIST. Never invent products or stock.`
-            );
-          }
-        } catch (err) {
-          logger.warn("chat-agent", "collection resolve failed; falling back to search", {
-            query,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
 
       if (counting) {
         const { raw, exhausted } = await searchCatalogForCount(
@@ -1126,6 +1071,10 @@ export async function runChatAgent(
     isDiscountQuery(lastUser) ||
     (isProductFollowUpQuery(lastUser) && hasRecentProductContext(history));
 
+  /** First round of a product search must call MCP search_catalog. */
+  const forceCatalogSearch =
+    shouldForceProductSearch(lastUser) || isDiscountQuery(lastUser);
+
   setSessionIntent(session, resolveTurnIntent(lastUser, session));
 
   const conversation: ChatCompletionMessageParam[] = [
@@ -1146,7 +1095,10 @@ export async function runChatAgent(
         model,
         messages: conversation,
         tools,
-        tool_choice: "auto",
+        tool_choice:
+          round === 0 && forceCatalogSearch
+            ? { type: "function", function: { name: "search_catalog" } }
+            : "auto",
         temperature: 0.3,
         max_tokens: needsLargeListBudget
           ? LARGE_LIST_COMPLETION_TOKENS

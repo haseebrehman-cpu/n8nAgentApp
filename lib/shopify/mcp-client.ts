@@ -7,6 +7,8 @@
  * throttling/network errors, and `AbortSignal` support.
  */
 
+import { logger } from "@/lib/logger";
+
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 3;
 
@@ -154,6 +156,21 @@ export async function callMcpTool(
           `Shopify MCP tool "${name}" returned an error: ${text || "unknown error"}`
         );
       }
+
+      let host = endpoint;
+      try {
+        host = new URL(endpoint).pathname.includes("/ucp/")
+          ? `${new URL(endpoint).host}/api/ucp/mcp`
+          : `${new URL(endpoint).host}/api/mcp`;
+      } catch {
+        // keep raw endpoint
+      }
+      logger.info("shopify-mcp", "tools/call ok", {
+        tool: name,
+        endpoint: host,
+        bytes: text.length,
+        attempt: attempt + 1,
+      });
 
       return text;
     } catch (err) {

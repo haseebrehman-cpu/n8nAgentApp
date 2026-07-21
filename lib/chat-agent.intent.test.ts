@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   extractOrderLookupToken,
+  getAmbiguousBrowseClarifyReply,
+  hasExplicitCatalogListOrCountIntent,
   hasRecentProductContext,
+  isAmbiguousBrowseQuery,
   isBareOrderNumberToken,
   isDiscountCodeQuery,
   isOffTopicQuery,
@@ -42,6 +45,35 @@ describe("isDiscountCodeQuery", () => {
   });
 });
 
+describe("isAmbiguousBrowseQuery", () => {
+  it("flags bare category phrases that need clarifying questions", () => {
+    expect(isAmbiguousBrowseQuery("boxing")).toBe(true);
+    expect(isAmbiguousBrowseQuery("gloves")).toBe(true);
+    expect(isAmbiguousBrowseQuery("boxing gloves")).toBe(true);
+    expect(isAmbiguousBrowseQuery("Boxing Gloves?")).toBe(true);
+    expect(isAmbiguousBrowseQuery("mma")).toBe(true);
+  });
+
+  it("does not flag explicit list/count or already-narrow queries", () => {
+    expect(isAmbiguousBrowseQuery("show me boxing gloves")).toBe(false);
+    expect(isAmbiguousBrowseQuery("list boxing gloves")).toBe(false);
+    expect(isAmbiguousBrowseQuery("how many boxing gloves")).toBe(false);
+    expect(isAmbiguousBrowseQuery("training boxing gloves")).toBe(false);
+    expect(isAmbiguousBrowseQuery("RDX F6 Kara Boxing Training Gloves")).toBe(
+      false
+    );
+    expect(hasExplicitCatalogListOrCountIntent("show me boxing gloves")).toBe(
+      true
+    );
+  });
+
+  it("returns a drill-down clarifying reply for boxing gloves", () => {
+    expect(getAmbiguousBrowseClarifyReply("boxing gloves")).toMatch(
+      /training gloves|sparring gloves|competition gloves/i
+    );
+  });
+});
+
 describe("shouldForceProductSearch", () => {
   it("forces search for product-like messages", () => {
     expect(shouldForceProductSearch("do you sell shin guards")).toBe(true);
@@ -50,10 +82,16 @@ describe("shouldForceProductSearch", () => {
     expect(shouldForceProductSearch("RDX F6 Kara Boxing Training Gloves")).toBe(
       true
     );
-    expect(shouldForceProductSearch("boxing gloves")).toBe(true);
+    expect(shouldForceProductSearch("training boxing gloves")).toBe(true);
     expect(shouldForceProductSearch("how many products in sauna vests")).toBe(
       true
     );
+  });
+
+  it("does not force search for ambiguous browse (clarify first)", () => {
+    expect(shouldForceProductSearch("boxing gloves")).toBe(false);
+    expect(shouldForceProductSearch("boxing")).toBe(false);
+    expect(shouldForceProductSearch("gloves")).toBe(false);
   });
 
   it("does not force search for tracking, off-topic, or bare order numbers", () => {

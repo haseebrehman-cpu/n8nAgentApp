@@ -15,6 +15,7 @@ function makeSession(): ChatSession {
     state: "idle",
     pendingOrderNumber: null,
     pendingCategory: null,
+    lastShownProducts: null,
     updatedAt: Date.now(),
     intent: null,
     promptTokens: 0,

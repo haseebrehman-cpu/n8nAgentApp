@@ -28,6 +28,11 @@ interface RawProduct {
   title?: string;
   url?: string;
   handle?: string;
+  /** Present on some Admin-shaped or extended payloads; Storefront MCP usually omits it. */
+  status?: string;
+  product_status?: string;
+  published?: boolean;
+  published_status?: string;
   description?: { html?: string; text?: string } | string;
   price_range?: { min?: Money; max?: Money };
   list_price_range?: { min?: Money; max?: Money };
@@ -127,7 +132,48 @@ function compactVariant(v: RawVariant): CompactVariant | null {
   return out;
 }
 
+const INACTIVE_STATUSES = new Set([
+  "draft",
+  "archived",
+  "archive",
+  "inactive",
+  "unlisted",
+  "deleted",
+]);
+
+/**
+ * Keep only active / sellable catalog items. Storefront MCP normally only
+ * returns published products; this still drops draft/archived/inactive if a
+ * status field is present on the payload.
+ */
+export function isActiveCatalogProduct(raw: RawProduct): boolean {
+  if (raw.published === false) return false;
+
+  const publishedStatus = String(raw.published_status ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    publishedStatus &&
+    (publishedStatus === "unpublished" ||
+      publishedStatus === "draft" ||
+      INACTIVE_STATUSES.has(publishedStatus))
+  ) {
+    return false;
+  }
+
+  const status = String(raw.status ?? raw.product_status ?? "")
+    .trim()
+    .toLowerCase();
+  if (!status) return true;
+  if (status === "active") return true;
+  if (INACTIVE_STATUSES.has(status)) return false;
+  // Unknown status values: keep (Storefront MCP may use other enums)
+  return true;
+}
+
 export function compactProduct(raw: RawProduct): CompactProduct | null {
+  if (!isActiveCatalogProduct(raw)) return null;
+
   const id = String(raw.id ?? "").trim();
   const title = String(raw.title ?? "").trim();
   if (!id || !title) return null;
@@ -255,9 +301,10 @@ export function singularizeToken(word: string): string {
  * - "how many products in sauna vests" → ["sauna", "vest"]
  * - "boxing gloves" → ["boxing", "glove"]
  * - "shin guards" → ["shin", "guard"]
+ * - "boxing headgear" → ["boxing", "head", "guard"] (store taxonomy synonym)
  */
 export function extractProductTerms(query: string): string[] {
-  return query
+  const raw = query
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/[\s-]+/)
@@ -265,14 +312,140 @@ export function extractProductTerms(query: string): string[] {
     .filter((t) => t.length >= 2 && !QUERY_STOP_WORDS.has(t))
     .map(singularizeToken)
     .filter((t) => t.length >= 2 && !QUERY_STOP_WORDS.has(t));
+
+  const expanded: string[] = [];
+  for (const t of raw) {
+    if (t === "headgear") {
+      expanded.push("head", "guard");
+    } else {
+      expanded.push(t);
+    }
+  }
+  return [...new Set(expanded)];
 }
 
-function titleHasTerm(title: string, term: string): boolean {
+/**
+ * Sport/nav context words that should not be required in every product title.
+ * "boxing head guards" still means Head Guards (store menu), not titles that
+ * literally contain "boxing".
+ */
+const OPTIONAL_SPORT_CONTEXT = new Set([
+  "boxing",
+  "mma",
+  "fitness",
+  "yoga",
+  "training",
+  "sparring",
+  "competition",
+]);
+
+/** Terms used for relevance matching (after dropping optional sport context). */
+export function matchTermsForQuery(query: string): string[] {
+  const terms = extractProductTerms(query);
+  if (terms.includes("head") && terms.includes("guard")) {
+    return terms.filter((t) => !OPTIONAL_SPORT_CONTEXT.has(t));
+  }
+  return terms;
+}
+
+export function titleHasTermForMatch(title: string, term: string): boolean {
   const kindRe = new RegExp(
     `(^|[^a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(s)?([^a-z0-9]|$)`,
     "i"
   );
   return kindRe.test(title);
+}
+
+/** @deprecated use titleHasTermForMatch — kept as internal alias */
+function titleHasTerm(title: string, term: string): boolean {
+  return titleHasTermForMatch(title, term);
+}
+
+/**
+ * Compound product names that should match multi-word category queries
+ * (e.g. "Headgear" / "Headguard" for "head guards").
+ */
+export function expandCategoryCompoundsForMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/headguards?/g, "head guard")
+    .replace(/headgears?/g, "head gear")
+    .replace(/shinguards?/g, "shin guard")
+    .replace(/groinguards?/g, "groin guard")
+    .replace(/mouthguards?/g, "mouth guard");
+}
+
+function expandCategoryCompounds(text: string): string {
+  return expandCategoryCompoundsForMatch(text);
+}
+
+function textMatchesAllTerms(text: string, terms: string[]): boolean {
+  const expanded = expandCategoryCompounds(text);
+  return terms.every((t) => titleHasTerm(expanded, t));
+}
+
+/** Body-part modifiers that disambiguate guard categories. */
+const GUARD_TYPE_MODIFIERS = new Set([
+  "head",
+  "shin",
+  "groin",
+  "mouth",
+  "face",
+  "chest",
+  "body",
+]);
+
+/**
+ * Known title patterns for multi-word categories (beyond literal term match).
+ */
+function matchesCategorySynonym(title: string, terms: string[]): boolean {
+  const set = new Set(terms);
+  if (set.has("head") && set.has("guard")) {
+    return /\bhead[\s-]?gears?\b|\bheadgears?\b|\bhead[\s-]?guards?\b|\bheadguards?\b/i.test(
+      title,
+    );
+  }
+  if (set.has("sauna") && set.has("vest")) {
+    return /\b(sauna|sweat)\s+vests?\b/i.test(title);
+  }
+  return false;
+}
+
+/**
+ * Reject clear cross-category hits (e.g. shin guards in a "head guards" query)
+ * even if a broad collection name matched.
+ */
+function isConflictingCategoryTitle(title: string, terms: string[]): boolean {
+  if (!terms.includes("guard")) return false;
+  const expanded = expandCategoryCompounds(title);
+  const asked = terms.find((t) => GUARD_TYPE_MODIFIERS.has(t));
+  if (!asked) return false;
+
+  for (const other of GUARD_TYPE_MODIFIERS) {
+    if (other === asked) continue;
+    // "shin guard" / "shinguard" style — conflict unless the asked type is also present
+    const otherRe = new RegExp(
+      `(^|[^a-z0-9])${other}([\\s-]?guards?)?([^a-z0-9]|$)`,
+      "i",
+    );
+    if (otherRe.test(expanded) && !titleHasTerm(expanded, asked)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function productMatchesQueryTerms(
+  product: { title: string; collections?: string[] },
+  terms: string[],
+): boolean {
+  if (isConflictingCategoryTitle(product.title, terms)) return false;
+
+  const cols = product.collections ?? [];
+  if (cols.some((c) => textMatchesAllTerms(String(c), terms))) return true;
+  if (textMatchesAllTerms(product.title, terms)) return true;
+  if (matchesCategorySynonym(product.title, terms)) return true;
+  return false;
 }
 
 /**
@@ -282,10 +455,11 @@ function titleHasTerm(title: string, term: string): boolean {
  * 0. Prefer products in a collection whose title/handle contains every query term
  *    (matches storefront category pages, e.g. Competition Gloves = 10 products
  *    even when titles say "Fight Gloves").
- * 1. Else if 2+ terms, prefer titles that contain ALL terms.
+ * 1. Union with titles that contain ALL terms (or known category synonyms).
  * 2. If that yields nothing and there are 3+ terms, retry with first + last term.
- * 3. Else keep titles that contain the last term when it looks like a product noun.
- * 4. If still nothing matches, return the original list so the model can ask.
+ * 3. Kind-only fallback ONLY when the query has no disambiguating modifier
+ *    (so "head guards" never becomes every shin/groin/mouth guard).
+ * 4. If still nothing matches, return empty for known product nouns.
  */
 export function filterProductsByQueryRelevance<
   T extends { title: string; collections?: string[] },
@@ -293,7 +467,7 @@ export function filterProductsByQueryRelevance<
   products: T[],
   query: string
 ): { products: T[]; filtered: boolean; kind: string | null } {
-  const terms = extractProductTerms(query);
+  const terms = matchTermsForQuery(query);
   if (terms.length === 0 || products.length === 0) {
     return { products, filtered: false, kind: null };
   }
@@ -323,36 +497,36 @@ export function filterProductsByQueryRelevance<
     "gi",
   ]);
 
-  const collectionMatched =
-    terms.length >= 2
-      ? products.filter((p) => {
-          const cols = p.collections ?? [];
-          return cols.some((c) =>
-            terms.every((t) => titleHasTerm(String(c), t))
-          );
-        })
-      : [];
+  const kindIsProductNoun = productKindTerms.has(kind);
+  const hasDisambiguatingModifier =
+    kind === "guard" &&
+    terms.some((t) => t !== kind && GUARD_TYPE_MODIFIERS.has(t));
 
-  let matched: T[] = collectionMatched;
-  if (matched.length === 0 && terms.length >= 2) {
-    matched = products.filter((p) =>
-      terms.every((t) => titleHasTerm(p.title, t))
-    );
+  let matched: T[] = [];
+  if (terms.length >= 2) {
+    matched = products.filter((p) => productMatchesQueryTerms(p, terms));
   }
   if (matched.length === 0 && terms.length >= 3) {
     const pair = [terms[0]!, kind];
+    matched = products.filter((p) => productMatchesQueryTerms(p, pair));
+  }
+  if (matched.length === 0 && !hasDisambiguatingModifier) {
+    // Safe kind-only fallback (e.g. "vests") — never for "head/shin/… guards".
     matched = products.filter((p) =>
-      pair.every((t) => titleHasTerm(p.title, t))
+      titleHasTerm(expandCategoryCompounds(p.title), kind),
     );
-  }
-  if (matched.length === 0 && productKindTerms.has(kind)) {
-    matched = products.filter((p) => titleHasTerm(p.title, kind));
-  }
-  if (matched.length === 0) {
-    matched = products.filter((p) => titleHasTerm(p.title, kind));
   }
 
   if (matched.length === 0) {
+    // The query named a concrete product type we recognise (e.g. "shoes",
+    // "boots") but nothing returned matches it — the store genuinely doesn't
+    // carry that item. Report zero matches instead of falling back to the full
+    // brand-matched list, which would mislabel unrelated gear as the request.
+    if (kindIsProductNoun) {
+      return { products: [], filtered: true, kind };
+    }
+    // Otherwise the "kind" is likely a modifier or brand token rather than a
+    // product noun; keep the original results so the model can still help.
     return { products, filtered: false, kind };
   }
 
@@ -375,8 +549,8 @@ export interface CompactCatalogOptions {
   /** True when we fetched every available search page for this query. */
   exhaustedSearch?: boolean;
   /**
-   * When true, keep every product in the payload (used for storefront
-   * collection fetches where membership is already the source of truth).
+   * When true, keep every product in the payload (skip title relevance
+   * filtering). Active-only filtering still applies.
    */
   skipRelevanceFilter?: boolean;
 }
@@ -406,6 +580,7 @@ export function compactCatalogMcpText(
   // search_catalog / lookup_catalog shape
   if (Array.isArray(obj.products)) {
     let products = (obj.products as RawProduct[])
+      .filter(isActiveCatalogProduct)
       .map(compactProduct)
       .filter((p): p is CompactProduct => Boolean(p));
 

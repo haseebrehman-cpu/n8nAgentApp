@@ -20,23 +20,9 @@ import { isConfigError } from "@/lib/config";
 import { getClientIp } from "@/lib/http/client-ip";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
-import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
+import { parseShopifyRegion } from "@/services/shopify/credentials";
 
 export const runtime = "nodejs";
-
-const VALID_REGIONS = new Set<ShopifyStoreRegion>([
-  "default",
-  "fr",
-  "de",
-  "es",
-  "uk",
-]);
-
-function parseRegion(raw: unknown): ShopifyStoreRegion {
-  if (typeof raw !== "string") return "default";
-  const region = raw.trim().toLowerCase() as ShopifyStoreRegion;
-  return VALID_REGIONS.has(region) ? region : "default";
-}
 
 function wantsStream(req: NextRequest, body: unknown): boolean {
   if (req.nextUrl.searchParams.get("stream") === "1") return true;
@@ -128,7 +114,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const region = parseRegion(
+  const region = parseShopifyRegion(
     typeof body === "object" && body !== null
       ? (body as { region?: unknown }).region
       : undefined

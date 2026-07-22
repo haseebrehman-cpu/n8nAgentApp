@@ -6,9 +6,11 @@ import {
   isAmbiguousBrowseQuery,
   isBareOrderNumberToken,
   isDiscountCodeQuery,
+  isHarmfulQuery,
   isOffTopicQuery,
   isOrderTrackingIntent,
   isProductFollowUpQuery,
+  needsProductClarification,
   shouldForceProductSearch,
 } from "@/lib/chat-agent";
 
@@ -67,6 +69,24 @@ describe("isAmbiguousBrowseQuery", () => {
   });
 });
 
+describe("needsProductClarification", () => {
+  it("flags ultra-broad shopping asks", () => {
+    expect(needsProductClarification("gloves")).toBe(true);
+    expect(needsProductClarification("I need gloves")).toBe(true);
+    expect(needsProductClarification("I need protection")).toBe(true);
+    expect(needsProductClarification("I need gym equipment")).toBe(true);
+    expect(needsProductClarification("looking for gear")).toBe(true);
+  });
+
+  it("does not flag clearer category or product queries", () => {
+    expect(needsProductClarification("boxing gloves")).toBe(false);
+    expect(needsProductClarification("head guards")).toBe(false);
+    expect(needsProductClarification("show me gloves")).toBe(false);
+    expect(needsProductClarification("how many gloves")).toBe(false);
+    expect(needsProductClarification("training gloves")).toBe(false);
+  });
+});
+
 describe("shouldForceProductSearch", () => {
   it("forces search for product-like messages", () => {
     expect(shouldForceProductSearch("do you sell shin guards")).toBe(true);
@@ -81,10 +101,14 @@ describe("shouldForceProductSearch", () => {
     );
   });
 
-  it("forces search for category browse (answer directly, no clarify)", () => {
+  it("forces search for clear category browse, not ultra-broad clarifies", () => {
     expect(shouldForceProductSearch("boxing gloves")).toBe(true);
     expect(shouldForceProductSearch("boxing")).toBe(true);
-    expect(shouldForceProductSearch("gloves")).toBe(true);
+    expect(shouldForceProductSearch("head guards")).toBe(true);
+    expect(shouldForceProductSearch("gloves")).toBe(false);
+    expect(shouldForceProductSearch("I need gloves")).toBe(false);
+    expect(shouldForceProductSearch("I need protection")).toBe(false);
+    expect(shouldForceProductSearch("I need gym equipment")).toBe(false);
   });
 
   it("does not force search for tracking, off-topic, or bare order numbers", () => {
@@ -100,6 +124,30 @@ describe("shouldForceProductSearch", () => {
   it("does not force search for pure policy questions", () => {
     expect(shouldForceProductSearch("what is your return policy")).toBe(false);
     expect(shouldForceProductSearch("how long does shipping take")).toBe(false);
+  });
+});
+
+describe("isHarmfulQuery", () => {
+  it("flags dangerous / illegal requests (incl. brand-name misuse)", () => {
+    expect(isHarmfulQuery("rdx bomb")).toBe(true);
+    expect(isHarmfulQuery("how to make rdx")).toBe(true);
+    expect(isHarmfulQuery("how to make a bomb")).toBe(true);
+    expect(isHarmfulQuery("do you sell explosives")).toBe(true);
+    expect(isHarmfulQuery("where can I buy a rifle")).toBe(true);
+    expect(isHarmfulQuery("give me a grenade")).toBe(true);
+  });
+
+  it("does not flag legitimate product or shopping queries", () => {
+    expect(isHarmfulQuery("rdx boxing gloves")).toBe(false);
+    expect(isHarmfulQuery("rdx lunch box")).toBe(false);
+    expect(isHarmfulQuery("punch bag")).toBe(false);
+    expect(isHarmfulQuery("boxing gloves")).toBe(false);
+    expect(isHarmfulQuery("track my order")).toBe(false);
+  });
+
+  it("keeps harmful queries out of forced product search", () => {
+    expect(shouldForceProductSearch("rdx bomb")).toBe(false);
+    expect(shouldForceProductSearch("how to make a bomb")).toBe(false);
   });
 });
 

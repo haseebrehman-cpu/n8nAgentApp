@@ -96,6 +96,34 @@ describe("extractProductTerms / filterProductsByQueryRelevance", () => {
     expect(matched.map((p) => p.title)).toEqual(["RDX Yoga Mat 6mm"]);
   });
 
+  it("returns zero matches when a known product type is not carried", () => {
+    const products = [
+      { title: "RDX R1 Duffel Bag with Backpack Straps" },
+      { title: "RDX F6 Kara Boxing Training Gloves Black" },
+      { title: "RDX T15 MMA Fight Shorts" },
+    ];
+    const { products: matched, filtered, kind } = filterProductsByQueryRelevance(
+      products,
+      "rdx shoes"
+    );
+    expect(kind).toBe("shoe");
+    expect(filtered).toBe(true);
+    expect(matched).toHaveLength(0);
+  });
+
+  it("keeps brand-only results when the term is not a product noun", () => {
+    const products = [
+      { title: "RDX R1 Duffel Bag" },
+      { title: "RDX F6 Boxing Gloves" },
+    ];
+    const { products: matched, filtered } = filterProductsByQueryRelevance(
+      products,
+      "rdx"
+    );
+    expect(filtered).toBe(false);
+    expect(matched).toHaveLength(2);
+  });
+
   it("falls back to product kind when modifiers are absent from titles", () => {
     const products = [
       { title: "RDX Men Sweat Vest" },
@@ -107,6 +135,90 @@ describe("extractProductTerms / filterProductsByQueryRelevance", () => {
     );
     expect(matched).toHaveLength(1);
     expect(matched[0]?.title).toContain("Vest");
+  });
+
+  it("matches head guards including headgear/headguard compound titles", () => {
+    const products = [
+      { title: "RDX H1 Head Guard" },
+      { title: "RDX Aura Headgear" },
+      { title: "RDX Kids Headguard" },
+      { title: "RDX Shin Guards" },
+      { title: "RDX Boxing Gloves" },
+      {
+        title: "RDX Fight Protector Pro",
+        collections: ["Head Guards"],
+      },
+    ];
+    const { products: matched, kind } = filterProductsByQueryRelevance(
+      products,
+      "head guards"
+    );
+    expect(kind).toBe("guard");
+    expect(matched.map((p) => p.title)).toEqual([
+      "RDX H1 Head Guard",
+      "RDX Aura Headgear",
+      "RDX Kids Headguard",
+      "RDX Fight Protector Pro",
+    ]);
+  });
+
+  it("does not count shin/groin/mouth guards as head guards", () => {
+    const products = [
+      { title: "RDX H1 Head Guard" },
+      { title: "RDX Shin Guards Black" },
+      { title: "RDX Groin Guard" },
+      { title: "RDX Mouth Guard Dual" },
+      { title: "RDX T1 Training Gloves" },
+      {
+        title: "RDX Mis-tagged Shin Guard",
+        collections: ["Head Guards"],
+      },
+    ];
+    const { products: matched } = filterProductsByQueryRelevance(
+      products,
+      "how many head guards",
+    );
+    expect(matched.map((p) => p.title)).toEqual(["RDX H1 Head Guard"]);
+  });
+
+  it("does not fall back to every guard when head-specific titles are missing", () => {
+    const products = [
+      { title: "RDX Shin Guards" },
+      { title: "RDX Groin Guard" },
+      { title: "RDX Mouth Guard" },
+    ];
+    const { products: matched, filtered } = filterProductsByQueryRelevance(
+      products,
+      "head guards",
+    );
+    expect(filtered).toBe(true);
+    expect(matched).toHaveLength(0);
+  });
+
+  it("treats boxing headgear as head guards (store taxonomy)", () => {
+    expect(extractProductTerms("boxing headgear")).toEqual([
+      "boxing",
+      "head",
+      "guard",
+    ]);
+    const products = [
+      { title: "RDX H1 Head Guard" },
+      { title: "RDX Aura Headgear" },
+      { title: "RDX Shin Guards" },
+      {
+        title: "RDX Fight Protector Pro",
+        collections: ["Head Guards"],
+      },
+    ];
+    const { products: matched } = filterProductsByQueryRelevance(
+      products,
+      "how many boxing headgear",
+    );
+    expect(matched.map((p) => p.title)).toEqual([
+      "RDX H1 Head Guard",
+      "RDX Aura Headgear",
+      "RDX Fight Protector Pro",
+    ]);
   });
 });
 
@@ -176,6 +288,61 @@ describe("compactProduct", () => {
     expect(product?.inStock).toBe(false);
     expect(product?.onSale).toBe(false);
     expect(product?.wasPrice).toBeNull();
+  });
+
+  it("drops draft, archived, and inactive products", () => {
+    expect(
+      compactProduct({
+        id: "gid://shopify/Product/d",
+        title: "Draft Guard",
+        status: "DRAFT",
+        variants: [
+          { title: "Default", availability: { available: true } },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      compactProduct({
+        id: "gid://shopify/Product/a",
+        title: "Archived Guard",
+        status: "archived",
+        variants: [
+          { title: "Default", availability: { available: true } },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      compactProduct({
+        id: "gid://shopify/Product/i",
+        title: "Inactive Guard",
+        status: "inactive",
+        variants: [
+          { title: "Default", availability: { available: true } },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps active products and products with no status (storefront default)", () => {
+    expect(
+      compactProduct({
+        id: "gid://shopify/Product/1",
+        title: "Active Guard",
+        status: "ACTIVE",
+        variants: [
+          { title: "Default", availability: { available: true } },
+        ],
+      })?.title,
+    ).toBe("Active Guard");
+    expect(
+      compactProduct({
+        id: "gid://shopify/Product/2",
+        title: "Published Guard",
+        variants: [
+          { title: "Default", availability: { available: false } },
+        ],
+      })?.title,
+    ).toBe("Published Guard");
   });
 });
 
@@ -269,6 +436,83 @@ describe("compactCatalogMcpText", () => {
     ]);
   });
 
+  it("reports productCount 0 for an unstocked product type (e.g. shoes)", () => {
+    const raw = JSON.stringify({
+      products: [
+        {
+          id: "gid://shopify/Product/1",
+          title: "RDX R1 Duffel Bag with Backpack Straps",
+          price_range: { min: { amount: 5299, currency: "GBP" } },
+          variants: [
+            {
+              title: "Red/Black",
+              availability: { available: true },
+              price: { amount: 5299, currency: "GBP" },
+            },
+          ],
+        },
+        {
+          id: "gid://shopify/Product/2",
+          title: "RDX F6 Kara Boxing Training Gloves Black",
+          price_range: { min: { amount: 2999, currency: "GBP" } },
+          variants: [
+            {
+              title: "Black / 10oz",
+              availability: { available: true },
+              price: { amount: 2999, currency: "GBP" },
+            },
+          ],
+        },
+      ],
+    });
+    const parsed = JSON.parse(
+      compactCatalogMcpText(raw, { query: "rdx shoes" })
+    );
+    expect(parsed.rawHitCount).toBe(2);
+    expect(parsed.productCount).toBe(0);
+    expect(parsed.relevanceFiltered).toBe(true);
+    expect(parsed.matchedKind).toBe("shoe");
+    expect(parsed.products).toHaveLength(0);
+  });
+
+  it("excludes draft and archived products from search results", () => {
+    const raw = JSON.stringify({
+      products: [
+        {
+          id: "gid://shopify/Product/1",
+          title: "RDX Active Head Guard",
+          status: "ACTIVE",
+          variants: [
+            { title: "M", availability: { available: true } },
+          ],
+        },
+        {
+          id: "gid://shopify/Product/2",
+          title: "RDX Draft Head Guard",
+          status: "DRAFT",
+          variants: [
+            { title: "M", availability: { available: true } },
+          ],
+        },
+        {
+          id: "gid://shopify/Product/3",
+          title: "RDX Archived Head Guard",
+          status: "ARCHIVED",
+          variants: [
+            { title: "M", availability: { available: false } },
+          ],
+        },
+      ],
+    });
+    const parsed = JSON.parse(
+      compactCatalogMcpText(raw, { query: "head guards" }),
+    );
+    expect(parsed.productCount).toBe(1);
+    expect(parsed.products.map((p: { title: string }) => p.title)).toEqual([
+      "RDX Active Head Guard",
+    ]);
+  });
+
   it("compacts get_product shape", () => {
     const raw = JSON.stringify({
       product: {
@@ -302,5 +546,14 @@ describe("normalizeSearchQuery", () => {
     expect(normalizeSearchQuery("bosing")).toBe("boxing");
     expect(normalizeSearchQuery("Boxng")).toBe("boxing");
     expect(normalizeSearchQuery("boxing gloves")).toBe("boxing gloves");
+  });
+
+  it("maps headgear to head guards (store category name)", () => {
+    expect(normalizeSearchQuery("boxing headgear")).toBe("boxing head guards");
+    expect(normalizeSearchQuery("how many boxing headgear")).toBe(
+      "how many boxing head guards",
+    );
+    expect(normalizeSearchQuery("head gear")).toBe("head guards");
+    expect(normalizeSearchQuery("Kids Headgear")).toBe("Kids head guards");
   });
 });

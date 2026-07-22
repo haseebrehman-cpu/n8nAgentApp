@@ -7,25 +7,12 @@ import {
 import { getClientIp } from "@/lib/http/client-ip";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
-import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
+import { parseShopifyRegion } from "@/services/shopify/credentials";
 
 export const runtime = "nodejs";
 
 const MAX_ORDER_NUMBER_CHARS = 64;
 const MAX_EMAIL_CHARS = 254;
-const VALID_REGIONS = new Set<ShopifyStoreRegion>([
-  "default",
-  "fr",
-  "de",
-  "es",
-  "uk",
-]);
-
-function parseRegion(raw: unknown): ShopifyStoreRegion {
-  if (typeof raw !== "string") return "default";
-  const region = raw.trim().toLowerCase() as ShopifyStoreRegion;
-  return VALID_REGIONS.has(region) ? region : "default";
-}
 
 export async function POST(req: NextRequest) {
   const rate = await checkRateLimit(getClientIp(req), { bucket: "order" });
@@ -93,7 +80,7 @@ export async function POST(req: NextRequest) {
   try {
     const result = await trackOrder(orderNumber, {
       email,
-      region: parseRegion(body.region),
+      region: parseShopifyRegion(body.region),
       signal: req.signal,
     });
 

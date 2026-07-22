@@ -18,6 +18,28 @@ export const SHOPIFY_API_VERSION = "2025-07";
 /** Logical store regions for future multi-market support. */
 export type ShopifyStoreRegion = "default" | "fr" | "de" | "es" | "uk";
 
+/** The complete set of supported store regions. */
+export const SHOPIFY_STORE_REGIONS: readonly ShopifyStoreRegion[] = [
+  "default",
+  "fr",
+  "de",
+  "es",
+  "uk",
+];
+
+const VALID_REGIONS = new Set<ShopifyStoreRegion>(SHOPIFY_STORE_REGIONS);
+
+/**
+ * Parse an untrusted request value into a supported store region, falling back
+ * to "default" for anything unknown. Shared by the API routes so region
+ * validation lives in one place.
+ */
+export function parseShopifyRegion(raw: unknown): ShopifyStoreRegion {
+  if (typeof raw !== "string") return "default";
+  const region = raw.trim().toLowerCase() as ShopifyStoreRegion;
+  return VALID_REGIONS.has(region) ? region : "default";
+}
+
 export interface ShopifyStoreCredentials {
   region: ShopifyStoreRegion;
   domain: string;

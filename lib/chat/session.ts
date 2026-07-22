@@ -8,6 +8,7 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { persistChatToMongo } from "@/lib/chat/persist-mongo";
 import { getRedis, redisKey } from "@/lib/redis";
+import type { ShownProduct } from "@/lib/chat/context/product-memory";
 import type { ChatMessagePayload } from "@/lib/types";
 
 export type ConversationState =
@@ -29,6 +30,8 @@ export interface ChatSession {
   pendingOrderNumber: string | null;
   /** Last category/productType discussed (for follow-ups like "list the ones in stock"). */
   pendingCategory: string | null;
+  /** Products most recently shown — resolves follow-ups like "these in red". */
+  lastShownProducts: ShownProduct[] | null;
   updatedAt: number;
 }
 
@@ -76,6 +79,7 @@ function emptySession(id: string): ChatSession {
     state: "idle",
     pendingOrderNumber: null,
     pendingCategory: null,
+    lastShownProducts: null,
     updatedAt: Date.now(),
     intent: null,
     promptTokens: 0,
@@ -103,6 +107,9 @@ async function loadSession(id: string): Promise<ChatSession | null> {
         state: parsed.state ?? "idle",
         pendingOrderNumber: parsed.pendingOrderNumber ?? null,
         pendingCategory: parsed.pendingCategory ?? null,
+        lastShownProducts: Array.isArray(parsed.lastShownProducts)
+          ? parsed.lastShownProducts
+          : null,
         updatedAt: parsed.updatedAt ?? Date.now(),
         intent: parsed.intent ?? null,
         promptTokens: asNonNegativeInt(parsed.promptTokens),
@@ -267,6 +274,15 @@ export function setPendingCategory(
   category: string | null,
 ): void {
   session.pendingCategory = category?.trim() ? category.trim() : null;
+}
+
+/** Remember (or clear) the products most recently shown to the customer. */
+export function setLastShownProducts(
+  session: ChatSession,
+  products: ShownProduct[] | null,
+): void {
+  session.lastShownProducts =
+    products && products.length > 0 ? products : null;
 }
 
 /** Cookie attributes for the session id. */

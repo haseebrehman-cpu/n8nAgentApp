@@ -93,7 +93,12 @@ export default function ChatWidget() {
     setMessages((prev) => [
       ...prev,
       { id: nextId(), role: "user", content: "M" },
-      { id: nextId(), role: "assistant", content: MENU_MESSAGE, showMenu: true },
+      {
+        id: nextId(),
+        role: "assistant",
+        content: MENU_MESSAGE,
+        showMenu: true,
+      },
     ]);
     inputRef.current?.focus();
   }

@@ -9,7 +9,7 @@ import { isValidEmailInput } from "@/lib/chatbot/orderTracking";
 import type { ChatMessagePayload } from "@/lib/types";
 import { CATEGORY_BROWSE_PHRASES, QUERY_TYPO_MAP } from "@/lib/chat/intent/patterns";
 import { isDiscountCodeQuery, isDiscountQuery } from "@/lib/chat/intent/discount";
-import { isHarmfulQuery } from "@/lib/chat/intent/safety";
+// import { isHarmfulQuery } from "@/lib/chat/intent/safety";
 import {
   isBareOrderNumberToken,
   isOrderTrackingIntent,
@@ -228,7 +228,7 @@ export function shouldForceProductSearch(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
-  if (isHarmfulQuery(t)) return false;
+  // if (isHarmfulQuery(t)) return false;
 
   // Broad "I need gloves/protection/equipment" → clarify first, don't force search.
   if (needsProductClarification(t)) return false;

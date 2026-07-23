@@ -14,8 +14,8 @@ export const ORDER_TRACKING_INTENT_RE =
  * (e.g. "rdx bomb", "how to make rdx"). Always refuse those and redirect. Kept
  * to unambiguous terms so real combat-sports/fitness products are never blocked.
  */
-export const HARMFUL_QUERY_RE =
-  /\b(bombs?|explosives?|detonat\w*|grenades?|c-?4|tnt|dynamite|ied|gunpowder|ammunition|firearms?|pistols?|rifles?|handguns?|shotguns?|silencers?|molotov|napalm|anthrax|nerve\s+agent|sarin|ricin|poison\w*|meth(?:amphetamine)?|cocaine|heroin|fentanyl|assassinat\w*|terroris\w*|how\s+to\s+(?:make|build|create)\s+(?:a\s+|an\s+|the\s+)?(?:bomb|rdx|explosive|weapon))\b/i;
+// export const HARMFUL_QUERY_RE =
+//   /\b(bombs?|explosives?|detonat\w*|grenades?|c-?4|tnt|dynamite|ied|gunpowder|ammunition|firearms?|pistols?|rifles?|handguns?|shotguns?|silencers?|molotov|napalm|anthrax|nerve\s+agent|sarin|ricin|poison\w*|meth(?:amphetamine)?|cocaine|heroin|fentanyl|assassinat\w*|terroris\w*|how\s+to\s+(?:make|build|create)\s+(?:a\s+|an\s+|the\s+)?(?:bomb|rdx|explosive|weapon))\b/i;
 
 /** Common single-word typos → intended browse terms (applied before search). */
 export const QUERY_TYPO_MAP: Record<string, string> = {

@@ -43,7 +43,7 @@ import {
   isAmbiguousBrowseQuery,
   isDiscountCodeQuery,
   isDiscountQuery,
-  isHarmfulQuery,
+  // isHarmfulQuery,
   isHumanEscalationRequest,
   isOffTopicQuery,
   isOrderTrackingIntent,
@@ -72,7 +72,7 @@ import {
   CONTENT_FILTERED_REPLY,
   DISCOUNT_CODE_REPLY,
   FALLBACK_REPLY,
-  HARMFUL_QUERY_REPLY,
+  // HARMFUL_QUERY_REPLY,
   HUMAN_ESCALATION_REPLY,
   NOT_AVAILABLE_REPLY,
   OFF_TOPIC_REPLY,
@@ -144,10 +144,10 @@ export async function runChatAgent(
 
   // Safety first: refuse dangerous/illegal requests before any tool routing.
   // "RDX" is our brand but also an explosive, so guard against misuse.
-  if (isHarmfulQuery(lastUser)) {
-    setSessionIntent(session, "off_topic");
-    return finishWithReply(session, HARMFUL_QUERY_REPLY);
-  }
+  // if (isHarmfulQuery(lastUser)) {
+  //   setSessionIntent(session, "off_topic");
+  //   return finishWithReply(session, HARMFUL_QUERY_REPLY);
+  // }
 
   if (isDiscountCodeQuery(lastUser)) {
     setSessionIntent(session, "discount_code");

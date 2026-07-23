@@ -16,6 +16,7 @@ import {
 import { useChatHistory } from "@/components/chat/hooks/useChatHistory";
 import { useChatStream } from "@/components/chat/hooks/useChatStream";
 import type { ChatMessage, ChatOption } from "@/components/chat/types";
+import type { ChatAttachment } from "@/lib/types";
 import { isMenuCommand, nextId } from "@/components/chat/utils";
 
 const PANEL_ID = "chat-widget-panel";
@@ -143,18 +144,38 @@ export default function ChatWidget() {
     setInput("");
 
     let assistantId: string | null = null;
-    const upsertAssistant = (content: string) => {
+    const upsertAssistant = (
+      content: string,
+      meta?: { attachments?: ChatAttachment[] },
+    ) => {
       if (!assistantId) {
         assistantId = nextId();
         setMessages((prev) => [
           ...prev,
-          { id: assistantId!, role: "assistant", content },
+          {
+            id: assistantId!,
+            role: "assistant",
+            content,
+            ...(meta?.attachments?.length
+              ? { attachments: meta.attachments }
+              : {}),
+          },
         ]);
         return;
       }
       const id = assistantId;
       setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, content } : m)),
+        prev.map((m) =>
+          m.id === id
+            ? {
+                ...m,
+                content,
+                ...(meta?.attachments?.length
+                  ? { attachments: meta.attachments }
+                  : {}),
+              }
+            : m,
+        ),
       );
     };
 

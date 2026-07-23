@@ -8,7 +8,9 @@
  * surfaced as a user-facing message through `onAssistantContent`.
  */
 
+import { sanitizeChatAttachments } from "@/lib/chat/attachments";
 import { stripAssistantMedia } from "@/lib/sanitize";
+import type { ChatAttachment } from "@/lib/types";
 
 const GENERIC_ERROR =
   "Something went wrong on our side. Please try again in a moment.";
@@ -21,6 +23,7 @@ interface SseEvent {
   text?: string;
   reply?: string;
   error?: string;
+  attachments?: unknown;
 }
 
 export interface StreamChatParams {
@@ -31,7 +34,10 @@ export interface StreamChatParams {
 
 export interface StreamChatHandlers {
   /** Called with the latest full assistant content to show (create or update). */
-  onAssistantContent: (content: string) => void;
+  onAssistantContent: (
+    content: string,
+    meta?: { attachments?: ChatAttachment[] },
+  ) => void;
 }
 
 export async function streamChatReply(
@@ -62,9 +68,12 @@ export async function streamChatReply(
     const data = (await res.json().catch(() => null)) as {
       reply?: string;
       error?: string;
+      attachments?: unknown;
     } | null;
+    const attachments = sanitizeChatAttachments(data?.attachments);
     onAssistantContent(
       stripAssistantMedia(data?.reply || data?.error || NO_REPLY_FALLBACK),
+      attachments.length ? { attachments } : undefined,
     );
     return;
   }
@@ -91,7 +100,11 @@ export async function streamChatReply(
           onAssistantContent(stripAssistantMedia(assembled));
         } else if (event.type === "done" && event.reply) {
           assembled = event.reply;
-          onAssistantContent(stripAssistantMedia(assembled));
+          const attachments = sanitizeChatAttachments(event.attachments);
+          onAssistantContent(
+            stripAssistantMedia(assembled),
+            attachments.length ? { attachments } : undefined,
+          );
         } else if (event.type === "error") {
           onAssistantContent(event.error ?? STREAM_ERROR);
         }

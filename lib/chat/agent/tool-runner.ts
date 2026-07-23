@@ -24,7 +24,9 @@ import {
   searchShopPoliciesAndFaqs,
 } from "@/lib/shopify/storefront-mcp";
 import { OrderTrackingError, trackOrder } from "@/lib/chatbot/orderTracking";
+import type { ChatAttachment } from "@/lib/types";
 import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
+import { fetchProductSizeChart } from "@/services/shopify/productSizeChart";
 import { isCatalogCountQuery, normalizeSearchQuery } from "@/lib/chat/intent";
 import {
   COUNT_PAYLOAD_PRODUCTS,
@@ -38,6 +40,11 @@ export interface RunToolOptions {
   region?: ShopifyStoreRegion;
   signal?: AbortSignal;
   lastUser?: string;
+  /**
+   * Called when get_size_chart resolves a verified chart. The model never sees
+   * the raw image URL — only this callback receives it for the HTTP response.
+   */
+  onSizeChartAttachment?: (attachment: ChatAttachment) => void;
 }
 
 export async function runTool(
@@ -159,6 +166,47 @@ export async function runTool(
         compactCatalogMcpText(data),
         "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. Never invent details.",
       );
+    }
+
+    if (name === "get_size_chart") {
+      const id = String(args.id ?? "").trim();
+      if (!id) return JSON.stringify({ error: "id is required" });
+
+      const chart = await fetchProductSizeChart(id, {
+        region: options.region,
+        signal: options.signal,
+      });
+
+      if (!chart) {
+        return JSON.stringify({
+          found: false,
+          productId: id,
+          message:
+            "No verified size chart is available for this product. Tell the customer honestly and offer to help with available sizes/variants from get_product, or suggest another product.",
+        });
+      }
+
+      options.onSizeChartAttachment?.({
+        kind: "size_chart",
+        productId: chart.productId,
+        productTitle: chart.productTitle,
+        url: chart.url,
+        altText: chart.altText,
+        width: chart.width,
+        height: chart.height,
+      });
+
+      // Never include the image URL in model-visible tool output.
+      return JSON.stringify({
+        found: true,
+        productId: chart.productId,
+        productTitle: chart.productTitle,
+        hasImage: true,
+        width: chart.width,
+        height: chart.height,
+        message:
+          "A verified size-chart image will be shown to the customer below your reply. Briefly confirm the product name, give any short sizing tips you already know from catalog data, and say the size chart is below. Do NOT paste, invent, or mention any image URL.",
+      });
     }
 
     if (name === "lookup_catalog") {

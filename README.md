@@ -35,9 +35,11 @@ Copy [`.env.example`](.env.example) to `.env.local` and fill in values.
 | `SHOPIFY_ADMIN_ACCESS_TOKEN` | Yes | Needs `read_products` + `read_orders` |
 | `SHOPIFY_MARKET_COUNTRY` | No | ISO-2 market code |
 | `SHOPIFY_STOREFRONT_URL` | No | Origin for product links |
+| `SHOPIFY_SIZE_CHART_METAFIELD_NAMESPACE` | No | Default `custom` — product metafield namespace for size charts |
+| `SHOPIFY_SIZE_CHART_METAFIELD_KEY` | No | Default tries `sizeguide`, then `size_chart`, then `size_guide`. Set to force a single key. |
 | `REDIS_URL` | Production: Yes | `redis://` or `rediss://` |
 | `NEXT_PUBLIC_STORE_NAME` | No | Widget display name |
-| `NEXT_PUBLIC_STOREFRONT_HOST` | No | Hostname allowlist for chat links |
+| `NEXT_PUBLIC_STOREFRONT_HOST` | No | Hostname allowlist for chat links **and** size-chart CDN paths (`/cdn/shop/files/`) |
 
 ### 3. Run
 
@@ -102,7 +104,21 @@ JSON (backward compatible):
 ```json
 POST /api/chat
 { "message": "Do you have boxing gloves?" }
-→ { "reply": "...", "requestId": "..." }
+→ { "reply": "...", "requestId": "...", "attachments": [] }
+```
+
+When a verified size chart is available, `attachments` may include:
+
+```json
+{
+  "kind": "size_chart",
+  "productId": "gid://shopify/Product/123",
+  "productTitle": "RDX Boxing Gloves AS2",
+  "url": "https://rdxsports.co.uk/cdn/shop/files/BGR-AS2_Size_Chart_new.webp?v=1",
+  "altText": "Size chart for RDX Boxing Gloves AS2",
+  "width": 1000,
+  "height": 800
+}
 ```
 
 Streaming:
@@ -112,9 +128,16 @@ POST /api/chat?stream=1
 Accept: text/event-stream
 ```
 
-SSE events: `{ type: "delta", text }`, `{ type: "done", reply, requestId }`, `{ type: "error", error }`.
+SSE events: `{ type: "delta", text }`, `{ type: "done", reply, requestId, attachments? }`, `{ type: "error", error }`.
 
 Legacy `{ "messages": [...] }` is accepted but **only the last user message** is used; assistant roles from the client are ignored.
+
+### Product size charts
+
+1. In Shopify Admin, product metafield `custom.sizeguide` (type **File** / `file_reference`, or **URL**). Also accepts `custom.size_chart` / `custom.size_guide`.
+2. Attach the size-chart image (store files under `/cdn/shop/files/…`).
+3. Ensure `NEXT_PUBLIC_STOREFRONT_HOST` matches your public storefront host so chart URLs are allowlisted.
+4. The chat agent calls `get_size_chart` with a product id; the image is delivered as a typed attachment (not as model-authored markdown). Arbitrary assistant images remain blocked.
 
 ## Roadmap (n8n)
 

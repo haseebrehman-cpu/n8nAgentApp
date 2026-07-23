@@ -3,9 +3,16 @@
  * Tools remain server-side; clients receive final assistant text as deltas.
  */
 
+import type { ChatAttachment } from "@/lib/types";
+
 export type ChatSseEvent =
   | { type: "delta"; text: string }
-  | { type: "done"; reply: string; requestId: string }
+  | {
+      type: "done";
+      reply: string;
+      requestId: string;
+      attachments?: ChatAttachment[];
+    }
   | { type: "error"; error: string };
 
 export function encodeSse(event: ChatSseEvent): string {

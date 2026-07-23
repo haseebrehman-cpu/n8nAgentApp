@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runChatAgent } from "@/lib/chat-agent";
+import { sanitizeChatAttachments } from "@/lib/chat/attachments";
 import { markChatInactive } from "@/lib/chat/persist-mongo";
 import {
   appendUserMessage,
@@ -151,20 +152,28 @@ export async function POST(req: NextRequest) {
     const readable = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          const reply = await runChatAgent(session.messages, {
+          const result = await runChatAgent(session.messages, {
             session,
             signal: req.signal,
             region,
             requestId,
           });
           await saveSession(session);
+          const attachments = sanitizeChatAttachments(result.attachments);
 
-          for (const part of chunkText(reply)) {
+          for (const part of chunkText(result.reply)) {
             if (req.signal.aborted) break;
             controller.enqueue(encoder.encode(encodeSse({ type: "delta", text: part })));
           }
           controller.enqueue(
-            encoder.encode(encodeSse({ type: "done", reply, requestId }))
+            encoder.encode(
+              encodeSse({
+                type: "done",
+                reply: result.reply,
+                requestId,
+                ...(attachments.length ? { attachments } : {}),
+              }),
+            ),
           );
         } catch (err) {
           await saveSession(session);
@@ -198,7 +207,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const reply = await runChatAgent(session.messages, {
+    const result = await runChatAgent(session.messages, {
       session,
       signal: req.signal,
       region,
@@ -206,9 +215,14 @@ export async function POST(req: NextRequest) {
     });
 
     await saveSession(session);
+    const attachments = sanitizeChatAttachments(result.attachments);
 
     return withSessionCookie(
-      NextResponse.json({ reply, requestId }),
+      NextResponse.json({
+        reply: result.reply,
+        requestId,
+        ...(attachments.length ? { attachments } : {}),
+      }),
       session.id
     );
   } catch (err) {

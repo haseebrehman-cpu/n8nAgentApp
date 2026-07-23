@@ -45,7 +45,7 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "get_product",
       description:
-        "Get full details for ONE specific product the customer has chosen, using a product id from a prior search_catalog or lookup_catalog result. Use when they want more detail, variants, sizes/colours, availability, or a link for a specific product.",
+        "Get full details for ONE specific product the customer has chosen, using a product id from a prior search_catalog or lookup_catalog result. Use when they want more detail, variants, sizes/colours, availability, or a link for a specific product. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
       parameters: {
         type: "object",
         properties: {
@@ -53,6 +53,25 @@ export const tools: ChatCompletionTool[] = [
             type: "string",
             description:
               "Product id (e.g. gid://shopify/Product/123) taken from a prior tool result.",
+          },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_size_chart",
+      description:
+        "Fetch the official size-chart image for ONE specific product using its product id from a prior search_catalog, lookup_catalog, or get_product result (or CONVERSATION CONTEXT). Use when the customer asks for a size chart, size guide, sizing chart, or how to size that product. If several products were shown and they did not name one, ask which product first — do not guess. Never invent or paste image URLs; when found is true the chart image is shown to the customer automatically below your reply.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description:
+              "Product id (e.g. gid://shopify/Product/123) taken from a prior tool result or conversation context.",
           },
         },
         required: ["id"],

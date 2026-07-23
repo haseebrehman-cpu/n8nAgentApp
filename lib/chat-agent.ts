@@ -33,7 +33,7 @@ import {
 import { logger } from "@/lib/logger";
 import { stripAssistantMedia } from "@/lib/sanitize";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
-import type { ChatMessagePayload } from "@/lib/types";
+import type { ChatAgentResult, ChatAttachment, ChatMessagePayload } from "@/lib/types";
 import type { RunChatAgentOptions } from "@/lib/chat/types";
 import {
   extractEmailFromText,
@@ -89,7 +89,8 @@ function finishWithReply(
   reply: string,
   nextState: ConversationState = "idle",
   pendingOrderNumber: string | null = null,
-): string {
+  attachments?: ChatAttachment[],
+): ChatAgentResult {
   const cleaned = stripAssistantMedia(reply) || FALLBACK_REPLY;
   appendAssistantMessage(session, cleaned);
   if (nextState === "idle") {
@@ -97,7 +98,9 @@ function finishWithReply(
   } else {
     setConversationState(session, nextState, pendingOrderNumber);
   }
-  return cleaned;
+  return attachments?.length
+    ? { reply: cleaned, attachments }
+    : { reply: cleaned };
 }
 
 /** Stable intent labels persisted on the session / Mongo chat document. */
@@ -133,7 +136,7 @@ function resolveTurnIntent(lastUser: string, session: ChatSession): string {
 export async function runChatAgent(
   history: ChatMessagePayload[],
   options: RunChatAgentOptions,
-): Promise<string> {
+): Promise<ChatAgentResult> {
   const { session, region, requestId } = options;
   const signal = combineDeadline(options.signal, AGENT_WALL_CLOCK_MS);
   const client = getClient();
@@ -334,17 +337,24 @@ export async function runChatAgent(
   let sawEmptyCatalog = false;
   let needsLargeListBudget = false;
   let capturedProducts: ShownProduct[] | null = null;
+  let capturedSizeChart: ChatAttachment | null = null;
 
   /** Persist the reply and any freshly shown products for the next turn. */
   const finish = (
     reply: string,
     nextState: ConversationState = "idle",
     pendingOrderNumber: string | null = null,
-  ): string => {
+  ): ChatAgentResult => {
     if (capturedProducts && capturedProducts.length > 0) {
       setLastShownProducts(session, capturedProducts);
     }
-    return finishWithReply(session, reply, nextState, pendingOrderNumber);
+    return finishWithReply(
+      session,
+      reply,
+      nextState,
+      pendingOrderNumber,
+      capturedSizeChart ? [capturedSizeChart] : undefined,
+    );
   };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -428,6 +438,9 @@ export async function runChatAgent(
         region,
         signal,
         lastUser,
+        onSizeChartAttachment: (attachment) => {
+          capturedSizeChart = attachment;
+        },
       });
 
       if (toolCall.function.name === "track_order") {

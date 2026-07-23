@@ -97,6 +97,6 @@ export function buildContextBlock(
   });
 
   return `CONVERSATION CONTEXT (trusted — for resolving the customer's follow-ups; do not repeat verbatim or expose ids to the customer):
-These are the products you most recently showed the customer. Resolve references like "these", "those", "this", "that", "it", "them", "the ones", "which one", "the cheapest", or "compare the two" to THIS list. For variant questions ("in red?", "in XL?") or details on one of these, call get_product/lookup_catalog with the matching id before searching again.
+These are the products you most recently showed the customer. Resolve references like "these", "those", "this", "that", "it", "them", "the ones", "which one", "the cheapest", or "compare the two" to THIS list. For variant questions ("in red?", "in XL?") or details on one of these, call get_product/lookup_catalog with the matching id before searching again. For size-chart / size-guide requests about one of these, call get_size_chart with the matching id.
 ${lines.join("\n")}`;
 }

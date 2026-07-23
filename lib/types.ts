@@ -5,6 +5,24 @@ export interface ChatMessagePayload {
   content: string;
 }
 
+/** Server-verified media attached to an assistant turn (never model-authored). */
+export type ChatAttachment = {
+  kind: "size_chart";
+  productId: string;
+  productTitle: string;
+  /** Allowlisted HTTPS size-chart image URL. */
+  url: string;
+  altText: string;
+  width: number | null;
+  height: number | null;
+};
+
+/** Result of one agent turn — text plus optional verified attachments. */
+export interface ChatAgentResult {
+  reply: string;
+  attachments?: ChatAttachment[];
+}
+
 export interface ChatRequestBody {
   /** Preferred: single user turn; server owns history. */
   message?: string;
@@ -16,6 +34,8 @@ export interface ChatRequestBody {
 export interface ChatSuccessResponse {
   reply: string;
   requestId?: string;
+  /** Server-verified attachments (e.g. product size charts). */
+  attachments?: ChatAttachment[];
 }
 
 export interface ChatErrorResponse {

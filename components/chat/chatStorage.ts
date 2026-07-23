@@ -5,6 +5,27 @@
 
 import { STORAGE_KEY } from "@/components/chat/constants";
 import type { ChatMessage } from "@/components/chat/types";
+import { sanitizeChatAttachments } from "@/lib/chat/attachments";
+
+function normalizeMessage(value: unknown): ChatMessage | null {
+  if (typeof value !== "object" || value === null) return null;
+  const m = value as Record<string, unknown>;
+  if (typeof m.id !== "string") return null;
+  if (m.role !== "user" && m.role !== "assistant") return null;
+  if (typeof m.content !== "string") return null;
+
+  const message: ChatMessage = {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+  };
+  if (m.showMenu === true) message.showMenu = true;
+
+  const attachments = sanitizeChatAttachments(m.attachments);
+  if (attachments.length) message.attachments = attachments;
+
+  return message;
+}
 
 /** Read the persisted transcript, returning [] when absent or malformed. */
 export function loadStoredMessages(): ChatMessage[] {
@@ -13,15 +34,9 @@ export function loadStoredMessages(): ChatMessage[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (m): m is ChatMessage =>
-        typeof m === "object" &&
-        m !== null &&
-        typeof (m as ChatMessage).id === "string" &&
-        ((m as ChatMessage).role === "user" ||
-          (m as ChatMessage).role === "assistant") &&
-        typeof (m as ChatMessage).content === "string",
-    );
+    return parsed
+      .map(normalizeMessage)
+      .filter((m): m is ChatMessage => m !== null);
   } catch {
     return [];
   }
@@ -30,7 +45,17 @@ export function loadStoredMessages(): ChatMessage[] {
 /** Persist the transcript, ignoring quota/availability errors. */
 export function saveStoredMessages(messages: ChatMessage[]): void {
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    const safe = messages.map((m) => {
+      const attachments = sanitizeChatAttachments(m.attachments);
+      return {
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        ...(m.showMenu ? { showMenu: true } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      };
+    });
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(safe));
   } catch {
     // storage full or unavailable
   }

@@ -8,6 +8,7 @@
 import type { RefObject } from "react";
 import MessageContent from "@/components/chat/MessageContent";
 import OptionButtons from "@/components/chat/OptionButtons";
+import SizeChartAttachment from "@/components/chat/SizeChartAttachment";
 import type { ChatMessage, ChatOption } from "@/components/chat/types";
 
 interface MessageListProps {
@@ -78,7 +79,17 @@ export default function MessageList({
               }
             >
               {message.role === "assistant" ? (
-                <MessageContent content={message.content} />
+                <>
+                  <MessageContent content={message.content} />
+                  {message.attachments?.map((attachment, index) =>
+                    attachment.kind === "size_chart" ? (
+                      <SizeChartAttachment
+                        key={`${message.id}-chart-${index}`}
+                        attachment={attachment}
+                      />
+                    ) : null,
+                  )}
+                </>
               ) : (
                 message.content
               )}

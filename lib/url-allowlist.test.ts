@@ -13,4 +13,12 @@ describe("isAllowedChatHref", () => {
       true
     );
   });
+
+  it("still blocks Shopify CDN for general chat links", () => {
+    expect(
+      isAllowedChatHref(
+        "https://cdn.shopify.com/s/files/1/0000/0001/files/chart.png",
+      ),
+    ).toBe(false);
+  });
 });

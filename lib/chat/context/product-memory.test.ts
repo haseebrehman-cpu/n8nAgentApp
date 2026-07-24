@@ -128,5 +128,10 @@ describe("buildContextBlock", () => {
     expect(block).toContain(
       "2. RDX Aura Plus — £44.99 — Out of stock — On sale (id: gid://2)",
     );
+    expect(block).toContain("get_inventory");
+  });
+
+  it("caps remembered products at 20 for list-mode follow-ups", () => {
+    expect(MAX_SHOWN_PRODUCTS).toBe(20);
   });
 });

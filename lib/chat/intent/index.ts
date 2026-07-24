@@ -30,6 +30,10 @@ export {
   normalizeSearchQuery,
   isCatalogCountQuery,
   normalizeBrowseKey,
+  isExplicitCatalogListQuery,
+  isInventoryQuantityQuery,
+  isCategoryBrowseQuery,
+  resolveCatalogResponseMode,
   hasExplicitCatalogListOrCountIntent,
   needsProductClarification,
   isAmbiguousBrowseQuery,
@@ -38,3 +42,4 @@ export {
   isOffTopicQuery,
   shouldForceProductSearch,
 } from "@/lib/chat/intent/message";
+export type { CatalogResponseMode } from "@/lib/chat/intent/message";

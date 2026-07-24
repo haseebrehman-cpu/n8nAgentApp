@@ -6,16 +6,19 @@
  *
  * Product catalog discovery uses Shopify Storefront MCP. Category totals that
  * match the live menu (e.g. Boxing → Head Guards = 17) are completed from the
- * public storefront collection endpoint — not Admin GraphQL.
+ * public storefront collection endpoint — not Admin GraphQL. Parent category
+ * queries (e.g. boxing gloves) merge every matching subcategory collection so
+ * productCount is the full category total.
+ * Exact unit quantities use Admin GraphQL via get_inventory.
  */
 
 import { isConfigError } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { compactCatalogMcpText } from "@/lib/shopify/compact-catalog";
 import {
-  fetchStorefrontCollectionProducts,
+  fetchStorefrontCollectionsMerged,
   isCategoryStyleQuery,
-  pickCategoryCollectionFromMcpSearch,
+  pickCategoryCollectionsFromMcpSearch,
 } from "@/lib/shopify/storefront-collection";
 import { enrichSearchCatalogWithStorefront } from "@/lib/shopify/storefront-product-search";
 import {
@@ -28,10 +31,20 @@ import { OrderTrackingError, trackOrder } from "@/lib/chatbot/orderTracking";
 import type { ChatAttachment } from "@/lib/types";
 import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
 import { fetchProductSizeChart } from "@/services/shopify/productSizeChart";
-import { isCatalogCountQuery, normalizeSearchQuery } from "@/lib/chat/intent";
 import {
-  COUNT_PAYLOAD_PRODUCTS,
+  fetchInventoryByIds,
+  fetchProductInventory,
+} from "@/services/shopify/productInventory";
+import {
+  isCatalogCountQuery,
+  normalizeSearchQuery,
+  resolveCatalogResponseMode,
+  type CatalogResponseMode,
+} from "@/lib/chat/intent";
+import {
+  CATEGORY_PAYLOAD_PRODUCTS,
   COUNT_SEARCH_LIMIT,
+  LIST_PAYLOAD_PRODUCTS,
   SEARCH_RESULT_LIMIT,
 } from "@/lib/chat/agent/config";
 import { wrapMcpResult } from "@/lib/chat/agent/mcp-format";
@@ -48,6 +61,37 @@ export interface RunToolOptions {
   onSizeChartAttachment?: (attachment: ChatAttachment) => void;
 }
 
+function payloadCapForMode(mode: CatalogResponseMode): number | undefined {
+  if (mode === "list") return LIST_PAYLOAD_PRODUCTS;
+  if (mode === "category") return CATEGORY_PAYLOAD_PRODUCTS;
+  return undefined;
+}
+
+function hintForMode(
+  mode: CatalogResponseMode,
+  collectionLabel?: string,
+): string {
+  if (mode === "list") {
+    const scope = collectionLabel
+      ? ` from the live storefront collection ${collectionLabel}`
+      : "";
+    return `LIST MODE${scope}: productCount is the category total (exact when countIsExactCategoryTotal is true; otherwise say "at least productCount"). Show at most ${LIST_PAYLOAD_PRODUCTS} products from the products array (name, price, stock status, URL only). If productsTruncated is true or productCount > productsShown, clearly say you are showing the first ${LIST_PAYLOAD_PRODUCTS} only. Never return more than ${LIST_PAYLOAD_PRODUCTS}. Never invent products or stock.`;
+  }
+
+  if (mode === "category") {
+    const scope = collectionLabel
+      ? ` from the live storefront collection ${collectionLabel}`
+      : "";
+    return `CATEGORY MODE${scope}: productCount is the category total (exact when countIsExactCategoryTotal is true; otherwise say "at least productCount"). Reply with the total and up to ${CATEGORY_PAYLOAD_PRODUCTS} products from the products array — each with name, price, stock status, and URL only. Then invite the customer to narrow by model, size, weight, material, or use. Never invent products or stock.`;
+  }
+
+  if (mode === "specific") {
+    return `SPECIFIC PRODUCT MODE: Prefer the best title match. If the customer asked about one product, call get_product with its id and reply with details for that product only — do not shortlist unrelated alternatives. Never invent products or stock.`;
+  }
+
+  return `Live search results (compacted + title-filtered). Recommend the best 3 (max 5) that fit what the customer asked for, each with a short reason, then offer a natural next step. DON'T dump the whole list. productCount is only an exact total when countIsExactCategoryTotal is true. Never invent products or stock.`;
+}
+
 export async function runTool(
   name: string,
   args: Record<string, unknown>,
@@ -58,7 +102,12 @@ export async function runTool(
       const query = normalizeSearchQuery(String(args.query ?? ""));
       if (!query) return JSON.stringify({ error: "query is required" });
 
+      const mode = resolveCatalogResponseMode(options.lastUser ?? "", query);
+      const needsExactTotal = mode === "category" || mode === "list";
+      const payloadCap = payloadCapForMode(mode);
+
       const counting =
+        needsExactTotal ||
         args.forCount === true ||
         args.forCount === "true" ||
         isCatalogCountQuery(options.lastUser ?? "") ||
@@ -70,7 +119,9 @@ export async function runTool(
           ? Math.min(Math.floor(limitRaw), 50)
           : counting
             ? COUNT_SEARCH_LIMIT
-            : SEARCH_RESULT_LIMIT;
+            : mode === "specific"
+              ? 3
+              : SEARCH_RESULT_LIMIT;
 
       // Include out-of-stock by default so counts and lists match full inventory.
       // Only filter to in-stock when the customer asks, or the model sets availableOnly.
@@ -82,11 +133,8 @@ export async function runTool(
         args.availableOnly === true ||
         args.availableOnly === "true";
 
-      // Counts and category-style queries: prefer the matching storefront
-      // collection when MCP surfaces one (accurate category totals). Use one MCP
-      // page first so Vercel stays under the function budget; only paginate MCP
-      // when counting and no collection was found.
-      const preferCollection = counting || isCategoryStyleQuery(query);
+      const preferCollection =
+        needsExactTotal || counting || isCategoryStyleQuery(query);
 
       if (preferCollection) {
         const firstPage = await searchCatalog(
@@ -98,29 +146,28 @@ export async function runTool(
           { signal: options.signal },
         );
 
-        const picked = pickCategoryCollectionFromMcpSearch(firstPage, query);
-        if (picked) {
+        const picked = pickCategoryCollectionsFromMcpSearch(firstPage, query);
+        if (picked.length > 0) {
           try {
-            const collectionRaw = await fetchStorefrontCollectionProducts(
-              picked.handle,
+            const collectionRaw = await fetchStorefrontCollectionsMerged(
+              picked.map((c) => ({ handle: c.handle, title: c.title })),
               {
                 signal: options.signal,
                 availableOnly,
-                collectionTitle: picked.title,
               },
             );
+            const label =
+              picked.length === 1
+                ? `"${picked[0]!.title}" (${picked[0]!.handle})`
+                : `${picked.length} subcategory collections under "${picked[0]!.title}" (total across all matching subcategories)`;
             return wrapMcpResult(
               compactCatalogMcpText(collectionRaw, {
                 query,
                 skipRelevanceFilter: true,
                 exhaustedSearch: true,
-                maxProductsInPayload: counting
-                  ? COUNT_PAYLOAD_PRODUCTS
-                  : undefined,
+                maxProductsInPayload: payloadCap,
               }),
-              counting
-                ? `COLLECTION COUNT: productCount is the live storefront collection total for "${picked.title}" (${picked.handle}) — use THAT number for an explicit 'how many' (matches the website category page). Includes out-of-stock unless in-stock-only was requested. Do NOT list products unless asked. Never invent products or stock.`
-                : `COLLECTION RESULTS: products from the live storefront collection "${picked.title}" (${picked.handle}). Act like a sales advisor: DON'T dump the whole list or lead with a raw count. Recommend the best 3 (max 5) that fit what the customer asked for, each with a short reason why. Offer to show more or narrow by size/colour/budget. Never invent products or stock.`,
+              hintForMode(mode === "generic" ? "category" : mode, label),
             );
           } catch (err) {
             logger.warn(
@@ -128,15 +175,15 @@ export async function runTool(
               "storefront collection fetch failed; using MCP search filter",
               {
                 query,
-                handle: picked.handle,
+                handles: picked.map((c) => c.handle),
                 error: err instanceof Error ? err.message : String(err),
               },
             );
           }
         }
 
-        // No collection (or storefront failed): full MCP pagination only for counts.
-        if (counting) {
+        // Exact totals without a collection: paginate MCP for category/list/count.
+        if (needsExactTotal || counting) {
           const { raw, exhausted } = await searchCatalogForCount(
             query,
             availableOnly,
@@ -147,13 +194,15 @@ export async function runTool(
             query,
             { signal: options.signal },
           );
+          const effectiveMode: CatalogResponseMode =
+            mode === "list" ? "list" : "category";
           return wrapMcpResult(
             compactCatalogMcpText(enrichedPaginated, {
               query,
               exhaustedSearch: exhausted,
-              maxProductsInPayload: COUNT_PAYLOAD_PRODUCTS,
+              maxProductsInPayload: payloadCap ?? CATEGORY_PAYLOAD_PRODUCTS,
             }),
-            "COUNT MODE (MCP): productCount is the title/collection-filtered total of ACTIVE catalog products across paginated search_catalog results (including out-of-stock unless availableOnly was true; never draft/archived/inactive) — use THAT number ONLY for an explicit 'how many' / total answer. Do NOT use the default page size (10) or productsShown as the total. If countIsExactCategoryTotal is true, state the number confidently. If hasMore is true, say you found at least productCount matching items. Do NOT list products unless they asked to see them. Never invent products or stock.",
+            hintForMode(effectiveMode),
           );
         }
 
@@ -163,8 +212,11 @@ export async function runTool(
           { signal: options.signal },
         );
         return wrapMcpResult(
-          compactCatalogMcpText(enrichedFirst, { query }),
-          "CATEGORY / LIST MODE (MCP): ACTIVE products from search_catalog, relevance-filtered (never draft/archived/inactive). Respond like a sales advisor: DON'T dump the whole list and DON'T lead with a raw count (the customer didn't ask 'how many'). Recommend the best 3 (max 5) matches for their need, each with a one-line reason why it fits. Then offer to show more or narrow by size/colour/budget. Includes out-of-stock unless filtered. Never invent products or stock.",
+          compactCatalogMcpText(enrichedFirst, {
+            query,
+            maxProductsInPayload: payloadCap,
+          }),
+          hintForMode(mode),
         );
       }
 
@@ -180,8 +232,11 @@ export async function runTool(
         signal: options.signal,
       });
       return wrapMcpResult(
-        compactCatalogMcpText(enriched, { query }),
-        "Live search results (compacted + title-filtered for EVERY query). Respond like a sales advisor, not a search engine: recommend the best 3 (max 5) products that fit what the customer asked for, each with a short reason why, then offer a natural next step (details, sizing, or narrowing by colour/budget). DON'T dump the whole list and DON'T lead with a raw count — productCount is only for an explicit 'how many' question (prefer forCount/limit 50 so counts are not capped). Do NOT count unrelated hits that were dropped. The products array already excludes unrelated hits — only mention products that appear in it. If productCount is 0 (empty products array) the store does not carry the item they asked for, even if rawHitCount is higher: say plainly we don't carry it, name what we DO sell, and offer to help — do NOT list the dropped hits or pretend they match. Never invent products or stock.",
+        compactCatalogMcpText(enriched, {
+          query,
+          maxProductsInPayload: payloadCap,
+        }),
+        hintForMode(mode),
       );
     }
 
@@ -192,8 +247,48 @@ export async function runTool(
       const data = await getProduct({ id }, { signal: options.signal });
       return wrapMcpResult(
         compactCatalogMcpText(data),
-        "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. Never invent details.",
+        "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. Never invent details.",
       );
+    }
+
+    if (name === "get_inventory") {
+      const singleId = String(args.id ?? "").trim();
+      const ids = Array.isArray(args.ids)
+        ? args.ids.map((x) => String(x).trim()).filter(Boolean)
+        : [];
+
+      if (!singleId && ids.length === 0) {
+        return JSON.stringify({ error: "id or ids is required" });
+      }
+
+      if (ids.length > 0) {
+        const batch = await fetchInventoryByIds(
+          singleId ? [singleId, ...ids] : ids,
+          { region: options.region, signal: options.signal },
+        );
+        return JSON.stringify({
+          results: batch,
+          hint: "Report exact quantities ONLY from this Admin inventory payload. If tracksInventory is false, do not invent a unit count — say quantity is not tracked. Zero means out of stock. Never estimate.",
+        });
+      }
+
+      const result = await fetchProductInventory(singleId, {
+        region: options.region,
+        signal: options.signal,
+      });
+
+      if (!result) {
+        return JSON.stringify({
+          found: false,
+          message:
+            "Invalid product/variant id. Ask which product they mean, or resolve an id from CONVERSATION CONTEXT / a prior catalog tool result.",
+        });
+      }
+
+      return JSON.stringify({
+        ...result,
+        hint: "Report exact quantities ONLY from this Admin inventory payload. If tracksInventory is false, do not invent a unit count. If totalInventory is 0, say the product is out of stock. If > 0, state the unit count naturally. Never estimate.",
+      });
     }
 
     if (name === "get_size_chart") {

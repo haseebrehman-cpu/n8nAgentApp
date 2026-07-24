@@ -32,7 +32,7 @@ Copy [`.env.example`](.env.example) to `.env.local` and fill in values.
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `OPENAI_MODEL` | No | Default `gpt-4o-mini` |
 | `SHOPIFY_STORE_DOMAIN` | Yes | `*.myshopify.com` (no protocol) |
-| `SHOPIFY_ADMIN_ACCESS_TOKEN` | Yes | Needs `read_products` + `read_orders` |
+| `SHOPIFY_ADMIN_ACCESS_TOKEN` | Yes | Needs `read_products` (size charts + exact inventory quantities) + `read_orders` |
 | `SHOPIFY_MARKET_COUNTRY` | No | ISO-2 market code |
 | `SHOPIFY_STOREFRONT_URL` | No | Origin for product links |
 | `SHOPIFY_SIZE_CHART_METAFIELD_NAMESPACE` | No | Default `custom` — product metafield namespace for size charts |

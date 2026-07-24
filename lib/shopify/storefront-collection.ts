@@ -6,6 +6,10 @@
  * live Boxing → Head Guards page is a specific collection (17 products).
  * Admin GraphQL is intentionally not used for catalog; this uses the same
  * public storefront collection data the website shows.
+ *
+ * Parent category queries (e.g. "boxing gloves") merge every matching
+ * subcategory collection so productCount is the full category total. Scoped
+ * queries (e.g. "training boxing gloves") still pick one best collection.
  */
 
 import { getShopifyConfig } from "@/lib/config";
@@ -22,6 +26,35 @@ export interface PickedCollection {
   title: string;
   score: number;
   hitCount: number;
+}
+
+/**
+ * Use-case / audience modifiers that narrow a parent category to one
+ * subcategory (e.g. "training boxing gloves" → training only).
+ */
+const SUBCATEGORY_SCOPE_MODIFIERS = new Set([
+  "training",
+  "sparring",
+  "competition",
+  "fight",
+  "bag",
+  "kids",
+  "kid",
+  "junior",
+  "youth",
+  "women",
+  "woman",
+  "mens",
+  "men",
+  "beginner",
+  "pro",
+  "professional",
+]);
+
+/** True when the query names a subcategory / use-case, not the parent category. */
+export function isScopedSubcategoryQuery(query: string): boolean {
+  const terms = extractProductTerms(query);
+  return terms.some((t) => SUBCATEGORY_SCOPE_MODIFIERS.has(t));
 }
 
 interface McpCollectionRef {
@@ -114,23 +147,56 @@ function scoreCollection(
   return score;
 }
 
-/**
- * From an MCP search payload, pick the best matching storefront collection
- * (e.g. boxing-protective-gear-head-guards for "head guards").
- */
-export function pickCategoryCollectionFromMcpSearch(
-  rawMcpJson: string,
+/** Whether a collection belongs in a parent-category union for this query. */
+function collectionFitsParentAggregation(
+  title: string,
+  handle: string,
   query: string,
-): PickedCollection | null {
+  terms: string[],
+): boolean {
+  const haystack = collectionHaystack(title, handle);
+  const q = query.toLowerCase();
+
+  // Promo / seasonal collections inflate or skew category totals.
+  if (/\b(sale|deal|mothers?|bestseller|gift)\b/i.test(haystack)) {
+    return false;
+  }
+
+  // Kids gear is its own subcategory unless the shopper asked for kids.
+  if (!/\bkids?\b/i.test(q) && /\bkids?\b/i.test(haystack)) {
+    return false;
+  }
+  if (/\bkids?\b/i.test(q) && !/\bkids?\b/i.test(haystack)) {
+    return false;
+  }
+
+  const queryHasMma = /\bmma\b/i.test(q);
+  const queryHasBoxing = /\bboxing\b/i.test(q);
+
+  if (queryHasMma && !queryHasBoxing) {
+    return /\bmma\b/i.test(haystack);
+  }
+  if (queryHasBoxing && !queryHasMma) {
+    return !/\bmma\b/i.test(haystack);
+  }
+
+  // Bare "head guards" defaults to the Boxing menu collection, not MMA.
+  if (terms.includes("head") && terms.includes("guard")) {
+    return /\bboxing\b/i.test(haystack) && !/\bmma\b/i.test(haystack);
+  }
+
+  return true;
+}
+
+function tallyCollectionsFromMcp(
+  rawMcpJson: string,
+): Map<string, { handle: string; title: string; hitCount: number }> | null {
   let parsed: { products?: McpProductRef[] };
   try {
     parsed = JSON.parse(rawMcpJson) as { products?: McpProductRef[] };
   } catch {
     return null;
   }
-
-  const terms = matchTermsForQuery(query);
-  if (terms.length < 2) return null;
 
   const tallies = new Map<
     string,
@@ -151,7 +217,27 @@ export function pickCategoryCollectionFromMcpSearch(
     }
   }
 
-  let best: PickedCollection | null = null;
+  return tallies;
+}
+
+/**
+ * From an MCP search payload, pick matching storefront collection(s).
+ *
+ * - Parent queries ("boxing gloves"): every matching subcategory collection
+ *   (so totals span training + competition + sparring, etc.).
+ * - Scoped queries ("training boxing gloves"): the single best collection.
+ */
+export function pickCategoryCollectionsFromMcpSearch(
+  rawMcpJson: string,
+  query: string,
+): PickedCollection[] {
+  const tallies = tallyCollectionsFromMcp(rawMcpJson);
+  if (!tallies) return [];
+
+  const terms = matchTermsForQuery(query);
+  if (terms.length < 2) return [];
+
+  const scored: PickedCollection[] = [];
   for (const entry of tallies.values()) {
     const score = scoreCollection(
       entry.title,
@@ -161,17 +247,40 @@ export function pickCategoryCollectionFromMcpSearch(
       query,
     );
     if (score <= 0) continue;
-    if (!best || score > best.score) {
-      best = {
-        handle: entry.handle,
-        title: entry.title,
-        score,
-        hitCount: entry.hitCount,
-      };
-    }
+    scored.push({
+      handle: entry.handle,
+      title: entry.title,
+      score,
+      hitCount: entry.hitCount,
+    });
   }
 
-  return best;
+  if (scored.length === 0) return [];
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Subcategory / use-case queries stay on one best collection.
+  if (isScopedSubcategoryQuery(query)) {
+    return [scored[0]!];
+  }
+
+  // Parent category: union all collections that fit the sport/audience scope.
+  const aggregated = scored.filter((c) =>
+    collectionFitsParentAggregation(c.title, c.handle, query, terms),
+  );
+
+  return aggregated.length > 0 ? aggregated : [scored[0]!];
+}
+
+/**
+ * From an MCP search payload, pick the best matching storefront collection
+ * (e.g. boxing-protective-gear-head-guards for "head guards").
+ */
+export function pickCategoryCollectionFromMcpSearch(
+  rawMcpJson: string,
+  query: string,
+): PickedCollection | null {
+  return pickCategoryCollectionsFromMcpSearch(rawMcpJson, query)[0] ?? null;
 }
 
 interface AjaxVariant {
@@ -301,6 +410,82 @@ export async function fetchStorefrontCollectionProducts(
     collection: {
       title: options.collectionTitle || handle,
       handle,
+    },
+  });
+}
+
+/**
+ * Load and merge products from multiple storefront collections, deduped by
+ * product id. Used for parent category totals across subcategories.
+ */
+export async function fetchStorefrontCollectionsMerged(
+  collections: { handle: string; title: string }[],
+  options: {
+    signal?: AbortSignal;
+    availableOnly?: boolean;
+  } = {},
+): Promise<string> {
+  if (collections.length === 0) {
+    return JSON.stringify({
+      products: [],
+      pagination: { has_next_page: false },
+    });
+  }
+
+  if (collections.length === 1) {
+    const only = collections[0]!;
+    return fetchStorefrontCollectionProducts(only.handle, {
+      signal: options.signal,
+      availableOnly: options.availableOnly,
+      collectionTitle: only.title,
+    });
+  }
+
+  const payloads = await Promise.all(
+    collections.map((c) =>
+      fetchStorefrontCollectionProducts(c.handle, {
+        signal: options.signal,
+        availableOnly: options.availableOnly,
+        collectionTitle: c.title,
+      }),
+    ),
+  );
+
+  const byId = new Map<string, unknown>();
+  const collectionMeta: { title: string; handle: string }[] = [];
+
+  for (let i = 0; i < payloads.length; i++) {
+    const col = collections[i]!;
+    collectionMeta.push({ title: col.title, handle: col.handle });
+    let parsed: { products?: { id?: string }[] };
+    try {
+      parsed = JSON.parse(payloads[i]!) as { products?: { id?: string }[] };
+    } catch {
+      continue;
+    }
+    for (const product of parsed.products ?? []) {
+      const id = String(product.id ?? "").trim();
+      if (!id || byId.has(id)) continue;
+      byId.set(id, product);
+    }
+  }
+
+  const products = [...byId.values()];
+  const primary = collections[0]!;
+
+  logger.info("storefront-collection", "merged collection products", {
+    collections: collections.map((c) => c.handle),
+    count: products.length,
+    availableOnly: options.availableOnly === true,
+  });
+
+  return JSON.stringify({
+    products,
+    pagination: { has_next_page: false },
+    collection: {
+      title: primary.title,
+      handle: primary.handle,
+      mergedFrom: collectionMeta,
     },
   });
 }

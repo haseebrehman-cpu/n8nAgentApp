@@ -44,18 +44,4 @@ export function isAllowedSizeChartUrl(href: string | undefined): boolean {
   }
 }
 
-/**
- * Normalize a catalog product id to a Shopify Admin product GID.
- * Accepts `gid://shopify/Product/123` or a numeric id.
- */
-export function toShopifyProductGid(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  const gidMatch = trimmed.match(/^gid:\/\/shopify\/Product\/(\d+)$/i);
-  if (gidMatch) return `gid://shopify/Product/${gidMatch[1]}`;
-
-  if (/^\d+$/.test(trimmed)) return `gid://shopify/Product/${trimmed}`;
-
-  return null;
-}
+export { toShopifyProductGid } from "@/lib/shopify/gid";

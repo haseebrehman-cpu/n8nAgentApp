@@ -5,12 +5,16 @@ import {
   hasRecentProductContext,
   isAmbiguousBrowseQuery,
   isBareOrderNumberToken,
+  isCategoryBrowseQuery,
   isDiscountCodeQuery,
+  isExplicitCatalogListQuery,
+  isInventoryQuantityQuery,
   // isHarmfulQuery — temporarily disabled in intent/safety
   isOffTopicQuery,
   isOrderTrackingIntent,
   isProductFollowUpQuery,
   needsProductClarification,
+  resolveCatalogResponseMode,
   shouldForceProductSearch,
 } from "@/lib/chat-agent";
 
@@ -66,6 +70,72 @@ describe("isAmbiguousBrowseQuery", () => {
     expect(hasExplicitCatalogListOrCountIntent("show me boxing gloves")).toBe(
       true
     );
+  });
+});
+
+describe("isExplicitCatalogListQuery", () => {
+  it("matches show/list all/every phrasing", () => {
+    expect(isExplicitCatalogListQuery("Show all boxing gloves")).toBe(true);
+    expect(isExplicitCatalogListQuery("list every MMA glove")).toBe(true);
+    expect(isExplicitCatalogListQuery("show all products in this category")).toBe(
+      true,
+    );
+    expect(isExplicitCatalogListQuery("give me all head guards")).toBe(true);
+  });
+
+  it("does not match soft show/list without all/every", () => {
+    expect(isExplicitCatalogListQuery("show me boxing gloves")).toBe(false);
+    expect(isExplicitCatalogListQuery("list boxing gloves")).toBe(false);
+    expect(isExplicitCatalogListQuery("boxing gloves")).toBe(false);
+  });
+});
+
+describe("isInventoryQuantityQuery", () => {
+  it("matches unit / inventory asks", () => {
+    expect(isInventoryQuantityQuery("How many are available?")).toBe(true);
+    expect(isInventoryQuantityQuery("What's the inventory?")).toBe(true);
+    expect(isInventoryQuantityQuery("how many of these are left")).toBe(true);
+    expect(isInventoryQuantityQuery("Is this product in stock?")).toBe(true);
+    expect(
+      isInventoryQuantityQuery("How many RDX T15 gloves are available?"),
+    ).toBe(true);
+  });
+
+  it("does not match category counts", () => {
+    expect(isInventoryQuantityQuery("how many boxing gloves")).toBe(false);
+    expect(isInventoryQuantityQuery("how many head guards")).toBe(false);
+  });
+});
+
+describe("isCategoryBrowseQuery / resolveCatalogResponseMode", () => {
+  it("treats bare categories and how-many as category mode", () => {
+    expect(isCategoryBrowseQuery("boxing gloves")).toBe(true);
+    expect(isCategoryBrowseQuery("how many boxing gloves")).toBe(true);
+    expect(isCategoryBrowseQuery("rash guards")).toBe(true);
+    expect(resolveCatalogResponseMode("boxing gloves", "boxing gloves")).toBe(
+      "category",
+    );
+    expect(
+      resolveCatalogResponseMode("how many head guards", "head guards"),
+    ).toBe("category");
+  });
+
+  it("treats explicit all/every as list mode", () => {
+    expect(
+      resolveCatalogResponseMode("Show all boxing gloves", "boxing gloves"),
+    ).toBe("list");
+    expect(
+      resolveCatalogResponseMode("list every MMA glove", "mma gloves"),
+    ).toBe("list");
+  });
+
+  it("treats named products as specific mode", () => {
+    expect(
+      resolveCatalogResponseMode(
+        "Tell me about RDX T15",
+        "RDX T15 Noir MMA Sparring Gloves 7oz",
+      ),
+    ).toBe("specific");
   });
 });
 

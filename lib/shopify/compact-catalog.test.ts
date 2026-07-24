@@ -541,6 +541,56 @@ describe("compactCatalogMcpText", () => {
   });
 });
 
+describe("compactCatalogMcpText payload caps", () => {
+  function makeProducts(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `gid://shopify/Product/${i + 1}`,
+      title: `Boxing Glove ${i + 1}`,
+      price_range: { min: { amount: 2999, currency: "GBP" } },
+      variants: [{ title: "Default", availability: { available: true } }],
+    }));
+  }
+
+  it("preserves productCount while truncating to maxProductsInPayload", () => {
+    const raw = JSON.stringify({
+      products: makeProducts(12),
+      pagination: { has_next_page: false },
+    });
+    const parsed = JSON.parse(
+      compactCatalogMcpText(raw, {
+        query: "boxing gloves",
+        skipRelevanceFilter: true,
+        exhaustedSearch: true,
+        maxProductsInPayload: 5,
+      }),
+    );
+    expect(parsed.productCount).toBe(12);
+    expect(parsed.products).toHaveLength(5);
+    expect(parsed.productsTruncated).toBe(true);
+    expect(parsed.productsShown).toBe(5);
+    expect(parsed.countIsExactCategoryTotal).toBe(true);
+  });
+
+  it("caps list payloads at 20 while keeping the full total", () => {
+    const raw = JSON.stringify({
+      products: makeProducts(35),
+      pagination: { has_next_page: false },
+    });
+    const parsed = JSON.parse(
+      compactCatalogMcpText(raw, {
+        query: "boxing gloves",
+        skipRelevanceFilter: true,
+        exhaustedSearch: true,
+        maxProductsInPayload: 20,
+      }),
+    );
+    expect(parsed.productCount).toBe(35);
+    expect(parsed.products).toHaveLength(20);
+    expect(parsed.productsTruncated).toBe(true);
+    expect(parsed.countIsExactCategoryTotal).toBe(true);
+  });
+});
+
 describe("normalizeSearchQuery", () => {
   it("corrects common boxing typos", () => {
     expect(normalizeSearchQuery("bosing")).toBe("boxing");

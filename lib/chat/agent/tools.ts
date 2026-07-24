@@ -11,7 +11,7 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "search_catalog",
       description:
-        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for all product questions: search, categories, prices, variants, stock, counts, and recommendations. Prefer concise queries (e.g. 'boxing gloves', 'sauna vest', 'head guards', 'products on sale'). Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. For very broad asks like 'I need gloves' / 'I need protection' / 'I need gym equipment', ask a short clarifying question first instead of searching. Do NOT use this for policy, shipping, or order-tracking questions.",
+        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for product discovery, categories, prices, variants, and recommendations. Prefer concise queries (e.g. 'boxing gloves', 'sauna vest', 'head guards'). Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. Server caps: category / 'how many' → exact total + up to 5 products; explicit 'show/list all/every' → exact total + up to 20 products. For exact unit quantities of a known product, use get_inventory instead. Do NOT use this for policy, shipping, or order-tracking questions.",
       parameters: {
         type: "object",
         properties: {
@@ -23,7 +23,7 @@ export const tools: ChatCompletionTool[] = [
           limit: {
             type: "number",
             description:
-              "Optional max number of products to return (caps at 50). For any 'how many' / total count question, pass 50 (the server also auto-paginates counts for every category).",
+              "Optional max number of products to return (caps at 50). Category/list modes apply server-side caps (5 or 20) regardless of this value.",
           },
           availableOnly: {
             type: "boolean",
@@ -33,7 +33,7 @@ export const tools: ChatCompletionTool[] = [
           forCount: {
             type: "boolean",
             description:
-              "Set true for any explicit count question ('how many X', 'total X products') across every category. Triggers a higher limit and pagination so productCount is not capped at the default page size. Counts include out-of-stock unless availableOnly is true.",
+              "Set true for any explicit count question ('how many X', 'total X products') across every category. Triggers pagination so productCount is not capped at the default page size. Counts include out-of-stock unless availableOnly is true.",
           },
         },
         required: ["query"],
@@ -45,7 +45,7 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "get_product",
       description:
-        "Get full details for ONE specific product the customer has chosen, using a product id from a prior search_catalog or lookup_catalog result. Use when they want more detail, variants, sizes/colours, availability, or a link for a specific product. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
+        "Get full details for ONE specific product the customer has chosen, using a product id from a prior search_catalog or lookup_catalog result. Use when they want more detail, variants, sizes/colours, availability, or a link for a specific product. For exact unit quantities, prefer get_inventory. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
       parameters: {
         type: "object",
         properties: {
@@ -56,6 +56,30 @@ export const tools: ChatCompletionTool[] = [
           },
         },
         required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_inventory",
+      description:
+        "Get exact Admin inventory quantities for ONE product (all variants) or up to 10 known product/variant ids from prior tool results or CONVERSATION CONTEXT. Use when the customer asks how many units are left, exact stock count, or quantity for a specific size/colour. Not for category counts ('how many boxing gloves') — use search_catalog for those. Resolve pronouns (it/this/that) from CONVERSATION CONTEXT before calling.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description:
+              "Product or variant id (e.g. gid://shopify/Product/123 or gid://shopify/ProductVariant/456) from a prior tool result or conversation context.",
+          },
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Optional batch of up to 10 product or variant ids from prior tool results.",
+          },
+        },
       },
     },
   },

@@ -21,8 +21,8 @@ export interface ShownProduct {
   onSale: boolean;
 }
 
-/** Cap so the injected context stays small and cheap. */
-export const MAX_SHOWN_PRODUCTS = 8;
+/** Cap so list-mode (up to 20) follow-ups still resolve pronouns. */
+export const MAX_SHOWN_PRODUCTS = 20;
 
 interface CatalogProductShape {
   id?: unknown;
@@ -97,6 +97,6 @@ export function buildContextBlock(
   });
 
   return `CONVERSATION CONTEXT (trusted — for resolving the customer's follow-ups; do not repeat verbatim or expose ids to the customer):
-These are the products you most recently showed the customer. Resolve references like "these", "those", "this", "that", "it", "them", "the ones", "which one", "the cheapest", or "compare the two" to THIS list. For variant questions ("in red?", "in XL?") or details on one of these, call get_product/lookup_catalog with the matching id before searching again. For size-chart / size-guide requests about one of these, call get_size_chart with the matching id.
+These are the products you most recently showed the customer. Resolve references like "these", "those", "this", "that", "it", "them", "the ones", "which one", "the cheapest", or "compare the two" to THIS list. For variant questions ("in red?", "in XL?") or details on one of these, call get_product/lookup_catalog with the matching id before searching again. For exact unit / inventory questions ("how many are available?", "how many left?"), call get_inventory with the matching id. For size-chart / size-guide requests about one of these, call get_size_chart with the matching id.
 ${lines.join("\n")}`;
 }

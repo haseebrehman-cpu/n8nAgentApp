@@ -14,6 +14,14 @@ import {
   isBareOrderNumberToken,
   isOrderTrackingIntent,
 } from "@/lib/chat/intent/order";
+import { isCategoryStyleQuery } from "@/lib/shopify/storefront-collection";
+import { isProductSpecificQuery } from "@/lib/shopify/storefront-product-search";
+
+/**
+ * Server-side catalog reply mode. Drives exact totals and product payload caps
+ * (category/count → 5, explicit list → 20) independently of model tool args.
+ */
+export type CatalogResponseMode = "list" | "category" | "specific" | "generic";
 
 /** Soft-correct typos and store taxonomy synonyms before catalog search. */
 export function normalizeSearchQuery(query: string): string {
@@ -52,10 +60,146 @@ export function normalizeBrowseKey(text: string): string {
     .trim();
 }
 
+/**
+ * Explicit "show/list all/every …" — return total + up to 20 products.
+ * Does not match softer "show me boxing gloves" (that is category mode).
+ */
+export function isExplicitCatalogListQuery(text: string): boolean {
+  const key = normalizeBrowseKey(text);
+  if (!key) return false;
+
+  if (
+    /\b(show|list|display|browse|see|give)\b/i.test(key) &&
+    /\b(all|every)\b/i.test(key)
+  ) {
+    return true;
+  }
+
+  if (/\ball\s+(?:the\s+)?(?:products?|items?|options?)\b/i.test(key)) {
+    return true;
+  }
+
+  if (/\b(?:products?|items?)\s+in\s+this\s+category\b/i.test(key)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Exact unit / inventory questions for a product already in context (or named).
+ * Distinct from category counts like "how many boxing gloves".
+ */
+export function isInventoryQuantityQuery(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+
+  if (
+    /\b(inventory|stock\s+level|units?\s+(?:available|left|in\s+stock))\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /\bhow\s+many\s+(?:are|is|units?|items?)?\s*(?:available|in\s+stock|left)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /\bhow\s+many\s+(?:of\s+)?(?:these|those|them|it|this|that)\b/i.test(t)
+  ) {
+    return true;
+  }
+
+  // Named product + availability quantity, e.g. "How many RDX T15 are available?"
+  if (
+    /\bhow\s+many\b/i.test(t) &&
+    /\b(available|in\s+stock|left)\b/i.test(t) &&
+    isProductSpecificQuery(t)
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(?:is|are)\s+(?:this|that|it|these|those|the\s+product)?\s*(?:product\s+)?(?:in\s+stock|available)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Category browse or category-count questions → exact total + up to 5 products.
+ * Excludes explicit full-list and product-unit inventory asks.
+ */
+export function isCategoryBrowseQuery(text: string): boolean {
+  const key = normalizeBrowseKey(text);
+  if (!key) return false;
+  if (isExplicitCatalogListQuery(key)) return false;
+  if (isInventoryQuantityQuery(key)) return false;
+
+  if (isCatalogCountQuery(key)) return true;
+  if (isAmbiguousBrowseQuery(key)) return true;
+
+  const normalized = normalizeSearchQuery(key);
+  if (
+    isCategoryStyleQuery(normalized) &&
+    !isProductSpecificQuery(normalized)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Resolve how search_catalog should shape its payload for this turn.
+ * Priority: list > category (incl. how-many) > specific > generic.
+ */
+export function resolveCatalogResponseMode(
+  lastUser: string,
+  query: string,
+): CatalogResponseMode {
+  const user = (lastUser || "").trim();
+  const q = (query || "").trim();
+  const primary = user || q;
+  const secondary = q || user;
+
+  if (
+    isExplicitCatalogListQuery(primary) ||
+    isExplicitCatalogListQuery(secondary)
+  ) {
+    return "list";
+  }
+
+  if (isCategoryBrowseQuery(primary) || isCategoryBrowseQuery(secondary)) {
+    return "category";
+  }
+
+  const normalized = normalizeSearchQuery(secondary || primary);
+  if (
+    isProductSpecificQuery(normalized) ||
+    isProductSpecificQuery(primary)
+  ) {
+    return "specific";
+  }
+
+  return "generic";
+}
+
 /** Explicit list / show / count phrasing — search immediately. */
 export function hasExplicitCatalogListOrCountIntent(key: string): boolean {
   if (!key) return false;
   if (isCatalogCountQuery(key)) return true;
+  if (isExplicitCatalogListQuery(key)) return true;
   return (
     /\b(show|list|display|browse)\s+(?:me\s+)?(?:all\s+|some\s+|the\s+)?/i.test(
       key,

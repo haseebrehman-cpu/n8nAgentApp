@@ -17,8 +17,15 @@ export const SEARCH_RESULT_LIMIT = 10;
 export const COUNT_SEARCH_LIMIT = 50;
 /** Safety cap on paginated count fetches. */
 export const MAX_COUNT_PAGES = 5;
-/** How many product rows to keep in the tool payload after a full count. */
-export const COUNT_PAYLOAD_PRODUCTS = 10;
+/**
+ * @deprecated Prefer CATEGORY_PAYLOAD_PRODUCTS — kept for older count callers.
+ * How many product rows to keep after a full count.
+ */
+export const COUNT_PAYLOAD_PRODUCTS = 5;
+/** Category / "how many" previews: exact total + up to this many products. */
+export const CATEGORY_PAYLOAD_PRODUCTS = 5;
+/** Explicit all/every/list requests: exact total + up to this many products. */
+export const LIST_PAYLOAD_PRODUCTS = 20;
 
 /** Catalog tools whose (empty) results should drive the "no match" fallback. */
 export const CATALOG_TOOLS = new Set<string>([

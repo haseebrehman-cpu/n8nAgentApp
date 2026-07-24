@@ -24,6 +24,8 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { parseShopifyRegion } from "@/services/shopify/credentials";
 
 export const runtime = "nodejs";
+/** Allow enough time for OpenAI + Shopify MCP (Vercel default is 10–15s). */
+export const maxDuration = 60;
 
 function wantsStream(req: NextRequest, body: unknown): boolean {
   if (req.nextUrl.searchParams.get("stream") === "1") return true;

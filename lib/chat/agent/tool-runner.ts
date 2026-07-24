@@ -82,18 +82,23 @@ export async function runTool(
         args.availableOnly === true ||
         args.availableOnly === "true";
 
-      // Counts and category-style queries: paginate MCP, then prefer the matching
-      // storefront collection page when MCP surfaces one (accurate category totals).
-      const paginateMcp = counting || isCategoryStyleQuery(query);
+      // Counts and category-style queries: prefer the matching storefront
+      // collection when MCP surfaces one (accurate category totals). Use one MCP
+      // page first so Vercel stays under the function budget; only paginate MCP
+      // when counting and no collection was found.
+      const preferCollection = counting || isCategoryStyleQuery(query);
 
-      if (paginateMcp) {
-        const { raw, exhausted } = await searchCatalogForCount(
-          query,
-          availableOnly,
+      if (preferCollection) {
+        const firstPage = await searchCatalog(
+          {
+            query,
+            pagination: { limit: COUNT_SEARCH_LIMIT },
+            filters: { available: availableOnly },
+          },
           { signal: options.signal },
         );
 
-        const picked = pickCategoryCollectionFromMcpSearch(raw, query);
+        const picked = pickCategoryCollectionFromMcpSearch(firstPage, query);
         if (picked) {
           try {
             const collectionRaw = await fetchStorefrontCollectionProducts(
@@ -130,22 +135,36 @@ export async function runTool(
           }
         }
 
-        const enrichedPaginated = await enrichSearchCatalogWithStorefront(
-          raw,
+        // No collection (or storefront failed): full MCP pagination only for counts.
+        if (counting) {
+          const { raw, exhausted } = await searchCatalogForCount(
+            query,
+            availableOnly,
+            { signal: options.signal },
+          );
+          const enrichedPaginated = await enrichSearchCatalogWithStorefront(
+            raw,
+            query,
+            { signal: options.signal },
+          );
+          return wrapMcpResult(
+            compactCatalogMcpText(enrichedPaginated, {
+              query,
+              exhaustedSearch: exhausted,
+              maxProductsInPayload: COUNT_PAYLOAD_PRODUCTS,
+            }),
+            "COUNT MODE (MCP): productCount is the title/collection-filtered total of ACTIVE catalog products across paginated search_catalog results (including out-of-stock unless availableOnly was true; never draft/archived/inactive) — use THAT number ONLY for an explicit 'how many' / total answer. Do NOT use the default page size (10) or productsShown as the total. If countIsExactCategoryTotal is true, state the number confidently. If hasMore is true, say you found at least productCount matching items. Do NOT list products unless they asked to see them. Never invent products or stock.",
+          );
+        }
+
+        const enrichedFirst = await enrichSearchCatalogWithStorefront(
+          firstPage,
           query,
           { signal: options.signal },
         );
         return wrapMcpResult(
-          compactCatalogMcpText(enrichedPaginated, {
-            query,
-            exhaustedSearch: exhausted,
-            maxProductsInPayload: counting
-              ? COUNT_PAYLOAD_PRODUCTS
-              : undefined,
-          }),
-          counting
-            ? "COUNT MODE (MCP): productCount is the title/collection-filtered total of ACTIVE catalog products across paginated search_catalog results (including out-of-stock unless availableOnly was true; never draft/archived/inactive) — use THAT number ONLY for an explicit 'how many' / total answer. Do NOT use the default page size (10) or productsShown as the total. If countIsExactCategoryTotal is true, state the number confidently. If hasMore is true, say you found at least productCount matching items. Do NOT list products unless they asked to see them. Never invent products or stock."
-            : "CATEGORY / LIST MODE (MCP): ACTIVE products from paginated search_catalog, relevance-filtered (never draft/archived/inactive). Respond like a sales advisor: DON'T dump the whole list and DON'T lead with a raw count (the customer didn't ask 'how many'). Recommend the best 3 (max 5) matches for their need, each with a one-line reason why it fits. Then offer to show more or narrow by size/colour/budget. Includes out-of-stock unless filtered. Never invent products or stock.",
+          compactCatalogMcpText(enrichedFirst, { query }),
+          "CATEGORY / LIST MODE (MCP): ACTIVE products from search_catalog, relevance-filtered (never draft/archived/inactive). Respond like a sales advisor: DON'T dump the whole list and DON'T lead with a raw count (the customer didn't ask 'how many'). Recommend the best 3 (max 5) matches for their need, each with a one-line reason why it fits. Then offer to show more or narrow by size/colour/budget. Includes out-of-stock unless filtered. Never invent products or stock.",
         );
       }
 

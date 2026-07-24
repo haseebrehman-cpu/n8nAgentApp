@@ -9,7 +9,8 @@
 
 import { logger } from "@/lib/logger";
 
-const REQUEST_TIMEOUT_MS = 15_000;
+/** Per-attempt budget; Shopify MCP is often slower from Vercel than localhost. */
+const REQUEST_TIMEOUT_MS = 25_000;
 const MAX_RETRIES = 3;
 
 export interface McpCallOptions {

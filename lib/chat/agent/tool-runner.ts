@@ -17,6 +17,7 @@ import {
   isCategoryStyleQuery,
   pickCategoryCollectionFromMcpSearch,
 } from "@/lib/shopify/storefront-collection";
+import { enrichSearchCatalogWithStorefront } from "@/lib/shopify/storefront-product-search";
 import {
   getProduct,
   lookupCatalog,
@@ -129,8 +130,13 @@ export async function runTool(
           }
         }
 
+        const enrichedPaginated = await enrichSearchCatalogWithStorefront(
+          raw,
+          query,
+          { signal: options.signal },
+        );
         return wrapMcpResult(
-          compactCatalogMcpText(raw, {
+          compactCatalogMcpText(enrichedPaginated, {
             query,
             exhaustedSearch: exhausted,
             maxProductsInPayload: counting
@@ -151,8 +157,11 @@ export async function runTool(
         },
         { signal: options.signal },
       );
+      const enriched = await enrichSearchCatalogWithStorefront(data, query, {
+        signal: options.signal,
+      });
       return wrapMcpResult(
-        compactCatalogMcpText(data, { query }),
+        compactCatalogMcpText(enriched, { query }),
         "Live search results (compacted + title-filtered for EVERY query). Respond like a sales advisor, not a search engine: recommend the best 3 (max 5) products that fit what the customer asked for, each with a short reason why, then offer a natural next step (details, sizing, or narrowing by colour/budget). DON'T dump the whole list and DON'T lead with a raw count — productCount is only for an explicit 'how many' question (prefer forCount/limit 50 so counts are not capped). Do NOT count unrelated hits that were dropped. The products array already excludes unrelated hits — only mention products that appear in it. If productCount is 0 (empty products array) the store does not carry the item they asked for, even if rawHitCount is higher: say plainly we don't carry it, name what we DO sell, and offer to help — do NOT list the dropped hits or pretend they match. Never invent products or stock.",
       );
     }

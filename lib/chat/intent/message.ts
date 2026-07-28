@@ -274,24 +274,37 @@ export function isProductFollowUpQuery(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
+  // 1. Comparison, selection, or question about items ("which of them", "which of these", "compare", "difference", "which is", "are any of them")
   if (
-    /\b(difference|different|differ|compare|comparison|versus|vs\.?|which\s+(one|is|are|should|glove|product|size|colour|color)|better(?:\s+for)?|between\s+(the\s+)?(two|them|these|those)|(?:the|these|those)\s+two|both(?:\s+of\s+them)?|first\s+one|second\s+one|that\s+one|this\s+one|the\s+other(?:\s+one)?|same\s+as|similar)\b/i.test(
+    /\b(difference|different|differ|compare|comparison|versus|vs\.?|which\s+(?:one|is|are|should|glove|product|size|weight|material|use|colour|color|of|has|have|among|were|item|option)|better(?:\s+for)?|between\s+(the\s+)?(two|them|these|those)|(?:the|these|those)\s+two|both(?:\s+of\s+them)?|first\s+one|second\s+one|third\s+one|that\s+one|this\s+one|the\s+other(?:\s+one)?|same\s+as|similar)\b/i.test(
       t,
     )
   ) {
     return true;
   }
 
+  // 2. Short follow-up conjunctions ("and the...", "what about...", "how about...", "same for...")
   if (
-    /^(and|also|what about|how about|same for|same question|and the)\b/i.test(t)
+    /^(and|also|what about|how about|same for|same question|and the|any of)\b/i.test(
+      t,
+    )
   ) {
     return true;
   }
 
-  // Pronoun / size follow-ups tied to prior product turns
+  // 3. Superlative & attribute query terms (price, discount, size, weight, stock, ratings)
+  if (
+    /\b(cheapest|cheaper|lowest\s+price|highest\s+price|most\s+expensive|best\s+value|lowest|highest|most\s+discount|biggest\s+discount|best\s+discount|on\s+sale|discounted|discounts?|marked\s+down|reduced|savings|lightest|heaviest)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  // 4. Pronoun / attribute follow-ups tied to prior product context
   if (
     /\b(them|these|those|it|that|this|ones?)\b/i.test(t) &&
-    /\b(oz|ounce|size|colour|color|stock|price|cheaper|expensive|heavier|lighter|options?|available)\b/i.test(
+    /\b(oz|ounce|size|weight|material|use|purpose|colour|color|stock|price|cheaper|cheapest|expensive|heavier|lighter|options?|available|lowest|highest|discount|discounted|discounts|sale|savings|kids?|adults?|sparring|training|competition|leather|synthetic)\b/i.test(
       t,
     )
   ) {
@@ -376,6 +389,9 @@ export function shouldForceProductSearch(text: string): boolean {
 
   // Broad "I need gloves/protection/equipment" → clarify first, don't force search.
   if (needsProductClarification(t)) return false;
+
+  // Product follow-up questions (lowest price, cheapest, comparison) refer to existing context.
+  if (isProductFollowUpQuery(t)) return false;
 
   // Clearer category browse (e.g. "boxing gloves", "head guards") → search now.
   if (isAmbiguousBrowseQuery(t)) return true;

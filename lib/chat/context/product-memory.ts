@@ -16,6 +16,7 @@ export interface ShownProduct {
   id: string;
   title: string;
   price: string | null;
+  wasPrice: string | null;
   url: string | null;
   inStock: boolean;
   onSale: boolean;
@@ -28,6 +29,7 @@ interface CatalogProductShape {
   id?: unknown;
   title?: unknown;
   price?: unknown;
+  wasPrice?: unknown;
   url?: unknown;
   inStock?: unknown;
   onSale?: unknown;
@@ -41,7 +43,11 @@ function toShownProduct(raw: CatalogProductShape): ShownProduct | null {
     id,
     title,
     price: typeof raw.price === "string" && raw.price.trim() ? raw.price : null,
-    url: typeof raw.url === "string" && raw.url.trim() ? raw.url : null,
+    wasPrice:
+      typeof raw.wasPrice === "string" && raw.wasPrice.trim()
+        ? raw.wasPrice
+        : null,
+    url: typeof raw.url === "string" && raw.url.trim() ? raw.url.trim() : null,
     inStock: raw.inStock === true,
     onSale: raw.onSale === true,
   };
@@ -91,12 +97,25 @@ export function buildContextBlock(
 
   const lines = products.map((p, i) => {
     const price = p.price ? ` — ${p.price}` : "";
+    const wasPrice = p.wasPrice ? ` (was ${p.wasPrice})` : "";
     const stock = p.inStock ? " — In stock" : " — Out of stock";
     const sale = p.onSale ? " — On sale" : "";
-    return `${i + 1}. ${p.title}${price}${stock}${sale} (id: ${p.id})`;
+    return `${i + 1}. ${p.title}${price}${wasPrice}${stock}${sale} (id: ${p.id})`;
   });
 
-  return `CONVERSATION CONTEXT (trusted — for resolving the customer's follow-ups; do not repeat verbatim or expose ids to the customer):
-These are the products you most recently showed the customer. Resolve references like "these", "those", "this", "that", "it", "them", "the ones", "which one", "the cheapest", or "compare the two" to THIS list. For variant questions ("in red?", "in XL?") or details on one of these, call get_product/lookup_catalog with the matching id before searching again. For exact unit / inventory questions ("how many are available?", "how many left?"), call get_inventory with the matching id. For size-chart / size-guide requests about one of these, call get_size_chart with the matching id.
+  return `CONVERSATION CONTEXT (trusted — for resolving ALL customer follow-ups; do not repeat verbatim or expose ids to the customer):
+These are the products you most recently showed the customer.
+
+GENERAL CONTEXT RESOLUTION (CRITICAL):
+- Use THIS context and conversation history to answer ANY follow-up, comparative, selection, or filtering question about these products (e.g., price, lowest/highest price, discounts, stock, size/weight, model, features, materials, use-case, suitability, or comparisons like "which of them...", "compare the first two", "are any for kids?", "which is lightest?").
+- DO NOT call search_catalog for questions about products already in this list or conversation history. Answer directly using the details provided in context and previous turns.
+- ACCURACY FOR PRICING & DISCOUNTS:
+  * Prices: Read all product prices carefully before stating which has the lowest or highest price.
+  * Discounts: A product is on sale/discounted ONLY if it has an explicit "was-price" or "On sale" tag. If none of the listed products are on sale, state clearly that none are currently discounted. Never confuse the lowest price item with a discounted item.
+- FOR SPECIFIC VARIANT / SPEC DETAILS: If the user asks for deeper specifications or color/size options not listed in context, call get_product or lookup_catalog with the product's id.
+- FOR EXACT INVENTORY UNITS: Call get_inventory with the product's id.
+- FOR SIZE CHARTS: Call get_size_chart with the product's id.
+
+Product List:
 ${lines.join("\n")}`;
 }

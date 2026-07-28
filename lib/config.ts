@@ -167,7 +167,7 @@ export function getRedisConfig(): RedisConfig {
 
   const productCacheTtlSeconds = parsePositiveInt(
     process.env.PRODUCT_CACHE_TTL_SECONDS,
-    1800
+    300
   );
   const productCacheEmptyTtlSeconds = parsePositiveInt(
     process.env.PRODUCT_CACHE_EMPTY_TTL_SECONDS,

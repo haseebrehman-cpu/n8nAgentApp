@@ -11,7 +11,7 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "search_catalog",
       description:
-        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for product discovery, categories, prices, variants, and recommendations. Prefer concise queries (e.g. 'boxing gloves', 'sauna vest', 'head guards'). Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. Server caps: category / 'how many' → exact total + up to 5 products; explicit 'show/list all/every' → exact total + up to 20 products. For exact unit quantities of a known product, use get_inventory instead. Do NOT use this for policy, shipping, or order-tracking questions.",
+        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for new product discovery, categories, prices, variants, and recommendations. Prefer concise queries (e.g. 'boxing gloves', 'sauna vest', 'head guards'). Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. Server caps: category / 'how many' → exact total + up to 5 products; explicit 'show/list all/every' → exact total + up to 20 products. For exact unit quantities of a known product, use get_inventory instead. Do NOT use this for follow-ups comparing or ranking products already shown in CONVERSATION CONTEXT (e.g. 'which of them has the lowest price', 'which is cheapest') — use context directly. Do NOT use this for policy, shipping, or order-tracking questions.",
       parameters: {
         type: "object",
         properties: {
@@ -45,7 +45,7 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "get_product",
       description:
-        "Get full details for ONE specific product the customer has chosen, using a product id from a prior search_catalog or lookup_catalog result. Use when they want more detail, variants, sizes/colours, availability, or a link for a specific product. For exact unit quantities, prefer get_inventory. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
+        "Get full details for ONE specific product using its product id from a prior search_catalog, lookup_catalog, or CONVERSATION CONTEXT result. ALWAYS call get_product when the customer asks about available sizes, colours, weights, variants, options, or detailed specifications for a specific product. Do NOT guess or rely on search_catalog's sample variant. For exact unit quantities, prefer get_inventory. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
       parameters: {
         type: "object",
         properties: {

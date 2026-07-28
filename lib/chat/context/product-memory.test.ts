@@ -42,6 +42,7 @@ describe("extractShownProducts", () => {
       id: "gid://shopify/Product/1",
       title: "RDX F6 Kara",
       price: "£32.99",
+      wasPrice: null,
       url: "https://shop/f6",
       inStock: true,
       onSale: false,
@@ -102,6 +103,7 @@ describe("buildContextBlock", () => {
       id: "gid://1",
       title: "RDX F6 Kara",
       price: "£32.99",
+      wasPrice: null,
       url: null,
       inStock: true,
       onSale: false,
@@ -110,6 +112,7 @@ describe("buildContextBlock", () => {
       id: "gid://2",
       title: "RDX Aura Plus",
       price: "£44.99",
+      wasPrice: "£49.99",
       url: null,
       inStock: false,
       onSale: true,
@@ -121,13 +124,29 @@ describe("buildContextBlock", () => {
     expect(buildContextBlock([])).toBeNull();
   });
 
-  it("lists products with price, stock, sale, and id", () => {
-    const block = buildContextBlock(products)!;
+  it("lists products with price, wasPrice, stock, sale, and id", () => {
+    const productsWithWas: ShownProduct[] = [
+      ...products,
+      {
+        id: "gid://3",
+        title: "RDX T15",
+        price: "£29.99",
+        wasPrice: "£39.99",
+        url: null,
+        inStock: true,
+        onSale: true,
+      },
+    ];
+    const block = buildContextBlock(productsWithWas)!;
     expect(block).toContain("CONVERSATION CONTEXT");
     expect(block).toContain("1. RDX F6 Kara — £32.99 — In stock (id: gid://1)");
     expect(block).toContain(
-      "2. RDX Aura Plus — £44.99 — Out of stock — On sale (id: gid://2)",
+      "2. RDX Aura Plus — £44.99 (was £49.99) — Out of stock — On sale (id: gid://2)",
     );
+    expect(block).toContain(
+      "3. RDX T15 — £29.99 (was £39.99) — In stock — On sale (id: gid://3)",
+    );
+    expect(block).toContain("GENERAL CONTEXT RESOLUTION (CRITICAL)");
     expect(block).toContain("get_inventory");
   });
 

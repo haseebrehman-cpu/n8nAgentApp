@@ -189,6 +189,10 @@ describe("shouldForceProductSearch", () => {
     expect(shouldForceProductSearch("1001")).toBe(false);
     expect(shouldForceProductSearch("find 1001")).toBe(false);
     expect(shouldForceProductSearch("hello")).toBe(false);
+    expect(shouldForceProductSearch("which of them has the lowest price")).toBe(
+      false,
+    );
+    expect(shouldForceProductSearch("which of these is cheapest")).toBe(false);
   });
 
   it("does not force search for pure policy questions", () => {
@@ -244,6 +248,14 @@ describe("isProductFollowUpQuery", () => {
     ).toBe(true);
     expect(isProductFollowUpQuery("which one should I get")).toBe(true);
     expect(isProductFollowUpQuery("how about the 14oz")).toBe(true);
+    expect(isProductFollowUpQuery("which of them has the lowest price")).toBe(
+      true,
+    );
+    expect(isProductFollowUpQuery("which of these is cheapest")).toBe(true);
+    expect(isProductFollowUpQuery("which one has the lowest price")).toBe(true);
+    expect(isProductFollowUpQuery("which is the most expensive")).toBe(true);
+    expect(isProductFollowUpQuery("which has the most discount")).toBe(true);
+    expect(isProductFollowUpQuery("which of them is on sale")).toBe(true);
   });
 
   it("does not treat trivia as a follow-up", () => {

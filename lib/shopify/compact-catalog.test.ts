@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   compactCatalogMcpText,
   compactProduct,
@@ -588,6 +588,40 @@ describe("compactCatalogMcpText payload caps", () => {
     expect(parsed.products).toHaveLength(20);
     expect(parsed.productsTruncated).toBe(true);
     expect(parsed.countIsExactCategoryTotal).toBe(true);
+  });
+});
+
+describe("compactProduct options & variants", () => {
+  it("extracts productOptions dimensions and variants", () => {
+    const raw = {
+      id: "gid://shopify/Product/100",
+      title: "RDX F4 Boxing Sparring Gloves Hook & Loop",
+      options: [
+        { name: "Color", values: ["Black", "Red", "Blue", "Pink"] },
+        { name: "Size", values: ["8oz", "10oz", "12oz", "14oz", "16oz"] },
+      ],
+      variants: [
+        { title: "Black / 10oz", availability: { available: true } },
+        { title: "Black / 14oz", availability: { available: false } },
+      ],
+    };
+    const compacted = compactProduct(raw)!;
+    expect(compacted.title).toBe("RDX F4 Boxing Sparring Gloves Hook & Loop");
+    expect(compacted.productOptions).toEqual([
+      { name: "Color", values: ["Black", "Red", "Blue", "Pink"] },
+      { name: "Size", values: ["8oz", "10oz", "12oz", "14oz", "16oz"] },
+    ]);
+    expect(compacted.variants).toHaveLength(2);
+    expect(compacted.variants[0]).toEqual({
+      title: "Black / 10oz",
+      available: true,
+      price: null,
+    });
+    expect(compacted.variants[1]).toEqual({
+      title: "Black / 14oz",
+      available: false,
+      price: null,
+    });
   });
 });
 

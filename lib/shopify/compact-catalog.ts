@@ -23,6 +23,12 @@ interface RawVariant {
   options?: { name?: string; value?: string }[];
 }
 
+interface RawOptionShape {
+  name?: string;
+  title?: string;
+  values?: (string | { label?: string })[];
+}
+
 interface RawProduct {
   id?: string;
   title?: string;
@@ -36,6 +42,8 @@ interface RawProduct {
   description?: { html?: string; text?: string } | string;
   price_range?: { min?: Money; max?: Money };
   list_price_range?: { min?: Money; max?: Money };
+  options?: RawOptionShape[];
+  product_options?: RawOptionShape[];
   variants?: RawVariant[];
   collections?: { title?: string; handle?: string }[];
 }
@@ -46,6 +54,11 @@ export interface CompactVariant {
   available: boolean;
   price: string | null;
   sku?: string;
+}
+
+export interface CompactOption {
+  name: string;
+  values: string[];
 }
 
 export interface CompactProduct {
@@ -59,6 +72,10 @@ export interface CompactProduct {
   inStock: boolean;
   /** Short plain-text summary for feature bullets — never full HTML. */
   summary: string | null;
+  /** Option dimensions (e.g. Color: [Black, Red, Blue], Size: [8oz, 10oz, 12oz, 14oz, 16oz]). */
+  productOptions?: CompactOption[];
+  /** Detailed variant list with individual stock & prices. */
+  variants: CompactVariant[];
   options: CompactVariant[];
   collections?: string[];
 }
@@ -199,6 +216,27 @@ export function compactProduct(raw: RawProduct): CompactProduct | null {
       ? formatMoney(raw.list_price_range?.min)
       : null;
 
+  const rawOptionsSource = (raw as Record<string, unknown>).options ?? (raw as Record<string, unknown>).product_options;
+  const rawOptions = Array.isArray(rawOptionsSource)
+    ? (rawOptionsSource as RawOptionShape[])
+        .map((opt) => {
+          if (!opt || typeof opt !== "object") return null;
+          const name = String(opt.name ?? opt.title ?? "").trim();
+          const values = Array.isArray(opt.values)
+            ? opt.values
+                .map((v) =>
+                  typeof v === "object" && v !== null
+                    ? String(v.label ?? "").trim()
+                    : String(v ?? "").trim(),
+                )
+                .filter(Boolean)
+            : [];
+          if (!name || values.length === 0) return null;
+          return { name, values };
+        })
+        .filter((opt): opt is CompactOption => Boolean(opt))
+    : [];
+
   const collections = (raw.collections ?? [])
     .map((c) => String(c.title ?? c.handle ?? "").trim())
     .filter(Boolean)
@@ -213,6 +251,8 @@ export function compactProduct(raw: RawProduct): CompactProduct | null {
     onSale: Boolean(wasPrice),
     inStock,
     summary: extractSummary(raw.description),
+    ...(rawOptions.length ? { productOptions: rawOptions } : {}),
+    variants,
     options: variants,
     ...(collections.length ? { collections } : {}),
   };

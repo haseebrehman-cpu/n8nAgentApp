@@ -193,6 +193,9 @@ describe("shouldForceProductSearch", () => {
       false,
     );
     expect(shouldForceProductSearch("which of these is cheapest")).toBe(false);
+    expect(shouldForceProductSearch("compare these")).toBe(false);
+    expect(shouldForceProductSearch("compare f4 and f6 gloves")).toBe(true);
+    expect(shouldForceProductSearch("F4 vs F6 gloves")).toBe(true);
   });
 
   it("does not force search for pure policy questions", () => {
@@ -256,6 +259,15 @@ describe("isProductFollowUpQuery", () => {
     expect(isProductFollowUpQuery("which is the most expensive")).toBe(true);
     expect(isProductFollowUpQuery("which has the most discount")).toBe(true);
     expect(isProductFollowUpQuery("which of them is on sale")).toBe(true);
+    expect(isProductFollowUpQuery("compare these")).toBe(true);
+    expect(isProductFollowUpQuery("compare the two")).toBe(true);
+  });
+
+  it("does not treat named-model comparisons as follow-ups", () => {
+    expect(isProductFollowUpQuery("compare f4 and f6 gloves")).toBe(false);
+    expect(isProductFollowUpQuery("F4 vs F6")).toBe(false);
+    expect(isProductFollowUpQuery("difference between T15 and T6")).toBe(false);
+    expect(isProductFollowUpQuery("which is better F4 or F6")).toBe(false);
   });
 
   it("does not treat trivia as a follow-up", () => {

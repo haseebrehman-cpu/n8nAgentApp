@@ -7,7 +7,11 @@
 
 import { isValidEmailInput } from "@/lib/chatbot/orderTracking";
 import type { ChatMessagePayload } from "@/lib/types";
-import { CATEGORY_BROWSE_PHRASES, QUERY_TYPO_MAP } from "@/lib/chat/intent/patterns";
+import {
+  CATEGORY_BROWSE_PHRASES,
+  PRODUCT_MODEL_CODE_RE,
+  QUERY_TYPO_MAP,
+} from "@/lib/chat/intent/patterns";
 import { isDiscountCodeQuery, isDiscountQuery } from "@/lib/chat/intent/discount";
 // import { isHarmfulQuery } from "@/lib/chat/intent/safety";
 import {
@@ -267,12 +271,27 @@ export function isAmbiguousBrowseQuery(text: string): boolean {
 }
 
 /**
+ * True when the message names a product series/model (F4, F6, T15…) rather
+ * than only referring to items already shown ("these", "the two", "14oz").
+ */
+export function hasNamedProductModel(text: string): boolean {
+  // Strip weight sizes so "14oz" / "16 oz" never look like model codes.
+  const withoutSizes = text.replace(/\b\d{1,2}\s*oz\b/gi, " ");
+  return PRODUCT_MODEL_CODE_RE.test(withoutSizes);
+}
+
+/**
  * Follow-ups that refer to products already in the conversation
  * ("difference between the two", "which size", "what about the black one").
+ * Named-model comparisons ("compare F4 and F6 gloves") are NOT follow-ups —
+ * they need a fresh catalog search.
  */
 export function isProductFollowUpQuery(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
+
+  // "compare F4 and F6" / "difference between T15 and T6" → new product lookup.
+  if (hasNamedProductModel(t)) return false;
 
   // 1. Comparison, selection, or question about items ("which of them", "which of these", "compare", "difference", "which is", "are any of them")
   if (

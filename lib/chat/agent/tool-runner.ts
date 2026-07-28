@@ -246,11 +246,24 @@ export async function runTool(
       const id = String(args.id ?? "").trim();
       if (!id) return JSON.stringify({ error: "id is required" });
 
-      const data = await getProduct({ id }, { signal: options.signal });
-      return wrapMcpResult(
-        compactCatalogMcpText(data),
-        "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. Never invent details.",
-      );
+      try {
+        const data = await getProduct({ id }, { signal: options.signal });
+        return wrapMcpResult(
+          compactCatalogMcpText(data),
+          "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. Never invent details.",
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/product_not_found/i.test(msg)) {
+          return JSON.stringify({
+            error: "product_not_found",
+            id,
+            message:
+              "That product id was not found. Do NOT invent or reuse guessed ids. Call search_catalog with the product name (e.g. 'F4 gloves', 'F6 gloves'), then call get_product or lookup_catalog using an id from those search results.",
+          });
+        }
+        throw err;
+      }
     }
 
     if (name === "get_inventory") {

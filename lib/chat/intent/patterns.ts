@@ -28,6 +28,12 @@ export const QUERY_TYPO_MAP: Record<string, string> = {
 };
 
 /**
+ * Product series / model codes (F4, F6, T15, AS2). Requires a letter before
+ * digits so bare sizes like "14oz" are not treated as named models.
+ */
+export const PRODUCT_MODEL_CODE_RE = /\b[a-z]{1,3}\d{1,4}[a-z]{0,2}\b/i;
+
+/**
  * Bare category browse phrases that should usually search immediately.
  * Very broad terms that need a clarifying follow-up first ("gloves",
  * "equipment", "gym equipment") are handled by needsProductClarification

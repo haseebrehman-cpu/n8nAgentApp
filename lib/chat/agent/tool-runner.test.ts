@@ -43,7 +43,7 @@ vi.mock("@/services/shopify/productSizeChart", () => ({
   fetchProductSizeChart: vi.fn(),
 }));
 
-import { searchCatalog } from "@/lib/shopify/storefront-mcp";
+import { searchCatalog, getProduct } from "@/lib/shopify/storefront-mcp";
 import {
   fetchStorefrontCollectionsMerged,
   pickCategoryCollectionsFromMcpSearch,
@@ -54,6 +54,7 @@ import { runTool } from "@/lib/chat/agent/tool-runner";
 import { extractCatalogData } from "@/lib/chat/agent/mcp-format";
 
 const mockedSearch = vi.mocked(searchCatalog);
+const mockedGetProduct = vi.mocked(getProduct);
 const mockedPick = vi.mocked(pickCategoryCollectionsFromMcpSearch);
 const mockedCollection = vi.mocked(fetchStorefrontCollectionsMerged);
 const mockedCount = vi.mocked(searchCatalogForCount);
@@ -233,5 +234,31 @@ describe("runTool get_inventory", () => {
   it("requires id or ids", async () => {
     const result = JSON.parse(await runTool("get_inventory", {}, {}));
     expect(result.error).toMatch(/id or ids/i);
+  });
+});
+
+describe("runTool get_product", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("tells the model to search when the id is not found", async () => {
+    mockedGetProduct.mockRejectedValue(
+      new Error(
+        'Shopify MCP tool "get_product" returned an error: {"messages":[{"code":"product_not_found"}]}',
+      ),
+    );
+
+    const result = JSON.parse(
+      await runTool(
+        "get_product",
+        { id: "gid://shopify/Product/999" },
+        {},
+      ),
+    );
+
+    expect(result.error).toBe("product_not_found");
+    expect(result.message).toMatch(/search_catalog/i);
+    expect(result.message).toMatch(/Do NOT invent/i);
   });
 });

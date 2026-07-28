@@ -9,6 +9,7 @@ export {
   // HARMFUL_QUERY_RE,
   QUERY_TYPO_MAP,
   CATEGORY_BROWSE_PHRASES,
+  PRODUCT_MODEL_CODE_RE,
 } from "@/lib/chat/intent/patterns";
 
 export {
@@ -37,6 +38,7 @@ export {
   hasExplicitCatalogListOrCountIntent,
   needsProductClarification,
   isAmbiguousBrowseQuery,
+  hasNamedProductModel,
   isProductFollowUpQuery,
   hasRecentProductContext,
   isOffTopicQuery,

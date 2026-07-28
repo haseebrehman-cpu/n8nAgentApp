@@ -5,10 +5,10 @@
  * does) — its single responsibility is running one tool safely.
  *
  * Product catalog discovery uses Shopify Storefront MCP. Category totals that
- * match the live menu (e.g. Boxing → Head Guards = 17) are completed from the
- * public storefront collection endpoint — not Admin GraphQL. Parent category
- * queries (e.g. boxing gloves) merge every matching subcategory collection so
- * productCount is the full category total.
+ * match the live menu (e.g. Boxing → Head Guards = 17) come from the public
+ * storefront collection endpoint — not Admin GraphQL — after resolving the
+ * query against the store's real collection directory, so productCount is the
+ * same number the category page shows.
  * Exact unit quantities use Admin GraphQL via get_inventory.
  */
 
@@ -18,7 +18,7 @@ import { compactCatalogMcpText } from "@/lib/shopify/compact-catalog";
 import {
   fetchStorefrontCollectionsMerged,
   isCategoryStyleQuery,
-  pickCategoryCollectionsFromMcpSearch,
+  resolveCategoryCollections,
 } from "@/lib/shopify/storefront-collection";
 import { enrichSearchCatalogWithStorefront } from "@/lib/shopify/storefront-product-search";
 import {
@@ -146,7 +146,9 @@ export async function runTool(
           { signal: options.signal },
         );
 
-        const picked = pickCategoryCollectionsFromMcpSearch(firstPage, query);
+        const picked = await resolveCategoryCollections(query, firstPage, {
+          signal: options.signal,
+        });
         if (picked.length > 0) {
           try {
             const collectionRaw = await fetchStorefrontCollectionsMerged(

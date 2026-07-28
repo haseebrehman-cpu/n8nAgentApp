@@ -30,6 +30,7 @@ export { isHumanEscalationRequest } from "@/lib/chat/intent/escalation";
 export {
   normalizeSearchQuery,
   isCatalogCountQuery,
+  extractModelCodeFromQuery,
   normalizeBrowseKey,
   isExplicitCatalogListQuery,
   isInventoryQuantityQuery,

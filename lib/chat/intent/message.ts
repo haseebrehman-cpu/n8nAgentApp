@@ -52,6 +52,35 @@ export function isCatalogCountQuery(text: string): boolean {
 }
 
 /**
+ * When a count/category query contains a product model code alongside a
+ * category word (e.g. "f4 gloves", "f4 boxing gloves"), splitting them lets
+ * the collection resolver find the right Shopify collection using just the
+ * category part ("gloves" / "boxing gloves"), while still filtering returned
+ * products to those whose title contains the model code.
+ *
+ * Returns null when the query has no model code, or when stripping the model
+ * code leaves nothing meaningful (bare model code query).
+ *
+ * Weight sizes ("14oz") are excluded so they are never treated as model codes.
+ */
+export function extractModelCodeFromQuery(
+  query: string,
+): { modelCode: string; categoryQuery: string } | null {
+  // Strip weight sizes first so "14oz" is never treated as a model code.
+  const withoutSizes = query.replace(/\b\d{1,2}\s*oz\b/gi, " ").trim();
+  const match = withoutSizes.match(/\b([a-z]{1,3}\d{1,4}[a-z]{0,2})\b/i);
+  if (!match) return null;
+  const modelCode = match[1]!;
+  // Remove the model code token from the original query.
+  const categoryQuery = query
+    .replace(new RegExp(`\\b${modelCode}\\b`, "i"), "")
+    .trim()
+    .replace(/\s+/g, " ");
+  // Need at least 2 chars of category text remaining to be useful.
+  return categoryQuery.length >= 2 ? { modelCode, categoryQuery } : null;
+}
+
+/**
  * Normalize a customer message to a bare browse phrase key
  * (lowercase, trim, strip trailing punctuation).
  */
@@ -167,6 +196,11 @@ export function isCategoryBrowseQuery(text: string): boolean {
 /**
  * Resolve how search_catalog should shape its payload for this turn.
  * Priority: list > category (incl. how-many) > specific > generic.
+ *
+ * IMPORTANT: count intent ("how many") always wins over specific-product mode.
+ * A query like "how many F4 gloves" contains a model code that would normally
+ * trigger isProductSpecificQuery, but the customer wants a COUNT — the
+ * collection/category path must run so we return an exact total.
  */
 export function resolveCatalogResponseMode(
   lastUser: string,
@@ -185,6 +219,13 @@ export function resolveCatalogResponseMode(
   }
 
   if (isCategoryBrowseQuery(primary) || isCategoryBrowseQuery(secondary)) {
+    return "category";
+  }
+
+  // Count intent in the user message always forces category mode, even when
+  // the model-generated query looks product-specific (e.g. "f4 gloves" with
+  // model code F4 matching MODEL_TOKEN_RE / isProductSpecificQuery).
+  if (isCatalogCountQuery(primary) || isCatalogCountQuery(secondary)) {
     return "category";
   }
 

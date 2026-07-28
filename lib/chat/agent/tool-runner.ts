@@ -39,6 +39,7 @@ import {
   isCatalogCountQuery,
   normalizeSearchQuery,
   resolveCatalogResponseMode,
+  extractModelCodeFromQuery,
   type CatalogResponseMode,
 } from "@/lib/chat/intent";
 import {
@@ -146,9 +147,24 @@ export async function runTool(
           { signal: options.signal },
         );
 
-        const picked = await resolveCategoryCollections(query, firstPage, {
-          signal: options.signal,
-        });
+        // When the query contains a product model code alongside a category
+        // word (e.g. "f4 gloves", "f4 boxing gloves"), the model code is NOT
+        // part of any Shopify collection title/handle — only the category word
+        // is ("Boxing Gloves").  Use just the category portion for collection
+        // resolution so the right collection is found, then rely on
+        // filterProductsByQueryRelevance (skipRelevanceFilter omitted / false)
+        // to narrow the collection's products to those whose title contains
+        // the model code, giving an accurate count.
+        const modelSplit = extractModelCodeFromQuery(query);
+        const collectionLookupQuery = modelSplit
+          ? modelSplit.categoryQuery
+          : query;
+
+        const picked = await resolveCategoryCollections(
+          collectionLookupQuery,
+          firstPage,
+          { signal: options.signal },
+        );
         if (picked.length > 0) {
           try {
             const collectionRaw = await fetchStorefrontCollectionsMerged(
@@ -162,13 +178,26 @@ export async function runTool(
               picked.length === 1
                 ? `"${picked[0]!.title}" (${picked[0]!.handle})`
                 : `${picked.length} subcategory collections under "${picked[0]!.title}" (total across all matching subcategories)`;
+            // When the original query had a model code (e.g. "f4 gloves"),
+            // pass that full query so filterProductsByQueryRelevance filters
+            // the collection's products down to the matching model.
+            // For plain category queries (no model code), skip relevance
+            // filtering as before — the collection is already the right scope.
+            const compactOptions = modelSplit
+              ? {
+                  query,                   // "f4 gloves" — filters to F4 products
+                  exhaustedSearch: true,
+                  maxProductsInPayload: payloadCap,
+                  // skipRelevanceFilter intentionally omitted → false
+                }
+              : {
+                  query,
+                  skipRelevanceFilter: true as const,
+                  exhaustedSearch: true,
+                  maxProductsInPayload: payloadCap,
+                };
             return wrapMcpResult(
-              compactCatalogMcpText(collectionRaw, {
-                query,
-                skipRelevanceFilter: true,
-                exhaustedSearch: true,
-                maxProductsInPayload: payloadCap,
-              }),
+              compactCatalogMcpText(collectionRaw, compactOptions),
               hintForMode(mode === "generic" ? "category" : mode, label),
             );
           } catch (err) {

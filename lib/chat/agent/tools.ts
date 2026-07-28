@@ -11,14 +11,14 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "search_catalog",
       description:
-        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for new product discovery, categories, prices, variants, and recommendations. Prefer concise queries (e.g. 'boxing gloves', 'sauna vest', 'head guards'). Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. Server caps: category / 'how many' → exact total + up to 5 products; explicit 'show/list all/every' → exact total + up to 20 products. For exact unit quantities of a known product, use get_inventory instead. Do NOT use this for follow-ups comparing or ranking products already shown in CONVERSATION CONTEXT (e.g. 'which of them has the lowest price', 'which is cheapest') — use context directly. Do NOT use this for policy, shipping, or order-tracking questions.",
+        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for new product discovery, categories, prices, variants, and recommendations. Prefer concise, canonical queries: use the core product/category terms only (e.g. 'boxing gloves', 'f4 gloves', 'head guards'). Do NOT expand the query with extra adjectives based on how the customer worded the question — 'how many f4 gloves' and 'how many gloves in f4' should both produce query='f4 gloves'. Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. Server caps: category / 'how many' → exact total + up to 5 products; explicit 'show/list all/every' → exact total + up to 20 products. For 'how many X' count questions: ALWAYS set forCount=true and keep the query to the essential product terms (e.g. 'f4 gloves', not 'f4 boxing sparring gloves hook loop'). For exact unit quantities of a known product, use get_inventory instead. Do NOT use this for follow-ups comparing or ranking products already shown in CONVERSATION CONTEXT (e.g. 'which of them has the lowest price', 'which is cheapest') — use context directly. Do NOT use this for policy, shipping, or order-tracking questions.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
             description:
-              'Free-text search query, e.g. "boxing gloves", "kids punch bag", "products on sale".',
+              'Free-text search query using core product/category terms only, e.g. "boxing gloves", "f4 gloves", "kids punch bag", "products on sale". Do NOT pad with extra adjectives — keep it canonical and concise.',
           },
           limit: {
             type: "number",
@@ -33,7 +33,7 @@ export const tools: ChatCompletionTool[] = [
           forCount: {
             type: "boolean",
             description:
-              "Set true for any explicit count question ('how many X', 'total X products') across every category. Triggers pagination so productCount is not capped at the default page size. Counts include out-of-stock unless availableOnly is true.",
+              "Set true for ANY explicit count question ('how many X', 'total X products', 'number of X') across every category. ALWAYS set this when the customer says 'how many'. Triggers pagination so productCount is not capped at the default page size. Counts include out-of-stock unless availableOnly is true.",
           },
         },
         required: ["query"],

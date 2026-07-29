@@ -174,7 +174,19 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
       lower,
     )
   ) {
-    return { kind: "accessories", searchQuery: "hand wraps mouthguard" };
+    // "gloves and accessories like wraps…" is a glove-first kit ask — do not
+    // rewrite catalog search to wraps/mouthguard only. Pure add-on follow-ups
+    // ("what else", "go with these") still use the accessories journey.
+    const gloveFirstKit =
+      /\bgloves?\b/i.test(lower) &&
+      /\baccessor(?:y|ies)\b/i.test(lower) &&
+      lower.search(/\bgloves?\b/i) < lower.search(/\baccessor/i) &&
+      !/\b(what\s+else|go\s+with|pair\s+with|hand\s+wraps?\s+too)\b/i.test(
+        lower,
+      );
+    if (!gloveFirstKit) {
+      return { kind: "accessories", searchQuery: "hand wraps mouthguard" };
+    }
   }
 
   if (
@@ -182,7 +194,10 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
       lower,
     )
   ) {
-    return { kind: "fbt", searchQuery: "boxing accessories hand wraps mouthguard" };
+    return {
+      kind: "fbt",
+      searchQuery: "boxing accessories hand wraps mouthguard",
+    };
   }
 
   if (
@@ -195,6 +210,8 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
 
   const budgetMax = extractBudgetMax(t);
   if (budgetMax != null && /\b(glove|guard|bag|recommend|budget|cheap)\b/i.test(lower)) {
+    // Keep budget journey, but do not pass a full kit laundry-list as the
+    // search query — primary product focus happens in query rewrite too.
     return {
       kind: "budget",
       searchQuery: t,

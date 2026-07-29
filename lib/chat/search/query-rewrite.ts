@@ -75,6 +75,128 @@ const COLOUR_TERMS = new Set([
   "camo",
 ]);
 
+/** Core shoppable gear — when listed first in a kit ask, this is the search target. */
+const CORE_PRODUCT_PHRASES: { kind: string; re: RegExp; label: string }[] = [
+  {
+    kind: "glove",
+    re: /\b(?:boxing\s+|mma\s+|sparring\s+|training\s+|bag\s+)?gloves?\b/i,
+    label: "boxing gloves",
+  },
+  {
+    kind: "mitt",
+    re: /\b(?:focus\s+|punch\s+)?mitts?\b/i,
+    label: "mitts",
+  },
+  {
+    kind: "shoe",
+    re: /\b(?:boxing\s+)?shoes?\b/i,
+    label: "boxing shoes",
+  },
+  {
+    kind: "boot",
+    re: /\b(?:boxing\s+)?boots?\b/i,
+    label: "boots",
+  },
+  {
+    kind: "vest",
+    re: /\b(?:sauna\s+|sweat\s+)?vests?\b/i,
+    label: "vests",
+  },
+  { kind: "short", re: /\bshorts?\b/i, label: "shorts" },
+  { kind: "robe", re: /\brobes?\b/i, label: "robes" },
+];
+
+/** Add-ons that must not steal ranking from the primary product in kit queries. */
+const ACCESSORY_PRODUCT_PHRASES: { kind: string; re: RegExp }[] = [
+  { kind: "wrap", re: /\b(?:hand\s+)?wraps?\b/i },
+  {
+    kind: "head_guard",
+    re: /\bhead[\s-]?guards?\b|\bheadguards?\b|\bhead[\s-]?gears?\b/i,
+  },
+  {
+    kind: "mouth_guard",
+    re: /\bmouth[\s-]?guards?\b|\bmouthguards?\b/i,
+  },
+  {
+    kind: "shin_guard",
+    re: /\bshin[\s-]?guards?\b|\bshinguards?\b/i,
+  },
+  {
+    kind: "groin_guard",
+    re: /\bgroin[\s-]?guards?\b|\bgroinguards?\b/i,
+  },
+  { kind: "bag", re: /\b(?:gym\s+|kit\s+|sports?\s+)?bags?\b/i },
+  { kind: "pad", re: /\b(?:thai\s+|kick\s+|belly\s+)?pads?\b/i },
+];
+
+type KindSpan = { kind: string; index: number; isCore: boolean };
+
+function findKindSpans(query: string): KindSpan[] {
+  const spans: KindSpan[] = [];
+  for (const p of CORE_PRODUCT_PHRASES) {
+    const m = p.re.exec(query);
+    if (m && m.index != null) {
+      spans.push({ kind: p.kind, index: m.index, isCore: true });
+    }
+  }
+  for (const p of ACCESSORY_PRODUCT_PHRASES) {
+    const m = p.re.exec(query);
+    if (m && m.index != null) {
+      spans.push({ kind: p.kind, index: m.index, isCore: false });
+    }
+  }
+  spans.sort((a, b) => a.index - b.index);
+  const seen = new Set<string>();
+  return spans.filter((s) => {
+    if (seen.has(s.kind)) return false;
+    seen.add(s.kind);
+    return true;
+  });
+}
+
+/**
+ * When a shopper asks for a main product PLUS accessories (wraps, head guard,
+ * bag…), search must target the primary product — not the last noun in the list.
+ * Otherwise ranking/filter treat "gym bag" / "head guard" as the kind and bury gloves.
+ */
+export function focusPrimaryProductQuery(query: string): string {
+  const q = query.trim().replace(/\s+/g, " ");
+  if (!q) return q;
+
+  const spans = findKindSpans(q);
+  const primary = spans[0];
+  if (!primary?.isCore) return q;
+  if (!spans.some((s) => !s.isCore && s.index > primary.index)) return q;
+
+  // Drop explicit accessory trailers ("with matching wraps, head guard…").
+  let focused = q
+    .replace(/\bwith\s+matching\b[\s\S]*$/i, " ")
+    .replace(
+      /\band\s+(?:also\s+)?(?:need|want|get|looking\s+for)\b[\s\S]*$/i,
+      " ",
+    )
+    .replace(/\bplus\b[\s\S]*$/i, " ")
+    .replace(/\bincluding\b[\s\S]*$/i, " ")
+    .trim();
+
+  // Strip remaining accessory phrases so they can't become the relevance "kind".
+  for (const p of ACCESSORY_PRODUCT_PHRASES) {
+    focused = focused.replace(p.re, " ");
+  }
+
+  focused = focused
+    .replace(/\b(?:with|and|plus|,)\s*$/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (focused.length < 8) {
+    const core = CORE_PRODUCT_PHRASES.find((p) => p.kind === primary.kind);
+    return normalizeSemanticQuery(core?.label ?? "boxing gloves");
+  }
+
+  return normalizeSemanticQuery(focused);
+}
+
 /**
  * Apply whole-phrase + per-token typo correction, then store taxonomy synonyms.
  */
@@ -217,17 +339,25 @@ export function rewriteSearchQuery(input: {
 
   if (prior && isSearchRefinement(input.lastUser, prior)) {
     return {
-      query: mergeRefinementIntoQuery(input.lastUser, prior),
+      query: focusPrimaryProductQuery(
+        mergeRefinementIntoQuery(input.lastUser, prior),
+      ),
       mergedFromContext: true,
     };
   }
 
   // "something similar to X" — keep full intent phrase for MCP semantics.
   if (/\bsimilar\b/i.test(input.lastUser) && userQ) {
-    return { query: userQ, mergedFromContext: false };
+    return {
+      query: focusPrimaryProductQuery(userQ),
+      mergedFromContext: false,
+    };
   }
 
-  return { query: base, mergedFromContext: false };
+  return {
+    query: focusPrimaryProductQuery(base),
+    mergedFromContext: false,
+  };
 }
 
 /**
@@ -235,7 +365,7 @@ export function rewriteSearchQuery(input: {
  * Strips budget → colour → skill/use modifiers, keeping product type.
  */
 export function buildFallbackQueries(query: string): string[] {
-  const q = normalizeSemanticQuery(query);
+  const q = focusPrimaryProductQuery(normalizeSemanticQuery(query));
   if (!q) return [];
 
   const variants: string[] = [];
@@ -272,7 +402,9 @@ export function buildFallbackQueries(query: string): string[] {
   // 3. Keep product-type core (last 1–2 meaningful terms + model codes)
   const terms = matchTermsForQuery(q);
   const model = terms.find((t) => /^[a-z]{0,3}\d{1,4}[a-z]{0,3}$/i.test(t));
-  const kind = terms[terms.length - 1];
+  const kind = terms.includes("glove")
+    ? "glove"
+    : terms[terms.length - 1];
   if (model && kind && model !== kind) {
     push(`${model} ${kind}`);
   } else if (kind) {
@@ -281,6 +413,8 @@ export function buildFallbackQueries(query: string): string[] {
       push("boxing gloves");
     } else if (terms.includes("mma") && kind === "glove") {
       push("mma gloves");
+    } else if (terms.includes("sparring") && kind === "glove") {
+      push("sparring gloves");
     } else {
       push(kind === "glove" ? "gloves" : kind);
     }

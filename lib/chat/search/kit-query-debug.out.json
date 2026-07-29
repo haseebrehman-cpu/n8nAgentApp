@@ -1,0 +1,469 @@
+[
+  {
+    "MSG": "I need sparring boxing gloves with matching wraps, head guard, mouth guard, shin guards and gym bag",
+    "journey": null,
+    "normalized": "I need sparring boxing gloves with matching wraps, head guard, mouth guard, shin guards and gym bag",
+    "extract": [
+      "need",
+      "sparring",
+      "boxing",
+      "glove",
+      "wrap",
+      "head",
+      "guard",
+      "mouth",
+      "shin",
+      "gym",
+      "bag"
+    ],
+    "matchTerms": [
+      "need",
+      "glove",
+      "wrap",
+      "head",
+      "guard",
+      "mouth",
+      "shin",
+      "gym",
+      "bag"
+    ],
+    "rewrite": {
+      "query": "I need sparring boxing gloves with matching wraps, head guard, mouth guard, shin guards and gym bag",
+      "mergedFromContext": false
+    },
+    "fallbacks": [
+      "bag"
+    ],
+    "mode": "specific",
+    "filteredTitles": [
+      "RDX H1 Head Guard",
+      "RDX Kids Headguard"
+    ],
+    "filteredKind": "bag",
+    "ranked": [
+      {
+        "title": "RDX Gym Bag",
+        "score": 138
+      },
+      {
+        "title": "RDX H1 Head Guard",
+        "score": 80
+      },
+      {
+        "title": "RDX Kids Headguard",
+        "score": 80
+      },
+      {
+        "title": "RDX Shin Guards",
+        "score": 79
+      },
+      {
+        "title": "RDX Hand Wraps",
+        "score": 66
+      },
+      {
+        "title": "RDX Mouth Guard",
+        "score": 34
+      },
+      {
+        "title": "RDX Sparring Boxing Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX T15 Training Gloves",
+        "score": 22
+      }
+    ],
+    "headCollectionMatchAll": false,
+    "gloveCollectionMatchAll": false,
+    "picked": []
+  },
+  {
+    "MSG": "sparring boxing gloves with wraps head guard mouth guard shin guards gym bag",
+    "journey": null,
+    "normalized": "sparring boxing gloves with wraps head guard mouth guard shin guards gym bag",
+    "extract": [
+      "sparring",
+      "boxing",
+      "glove",
+      "wrap",
+      "head",
+      "guard",
+      "mouth",
+      "shin",
+      "gym",
+      "bag"
+    ],
+    "matchTerms": [
+      "glove",
+      "wrap",
+      "head",
+      "guard",
+      "mouth",
+      "shin",
+      "gym",
+      "bag"
+    ],
+    "rewrite": {
+      "query": "sparring boxing gloves with wraps head guard mouth guard shin guards gym bag",
+      "mergedFromContext": false
+    },
+    "fallbacks": [
+      "bag"
+    ],
+    "mode": "specific",
+    "filteredTitles": [
+      "RDX H1 Head Guard",
+      "RDX Kids Headguard"
+    ],
+    "filteredKind": "bag",
+    "ranked": [
+      {
+        "title": "RDX Gym Bag",
+        "score": 138
+      },
+      {
+        "title": "RDX H1 Head Guard",
+        "score": 80
+      },
+      {
+        "title": "RDX Kids Headguard",
+        "score": 80
+      },
+      {
+        "title": "RDX Shin Guards",
+        "score": 79
+      },
+      {
+        "title": "RDX Hand Wraps",
+        "score": 66
+      },
+      {
+        "title": "RDX Mouth Guard",
+        "score": 34
+      },
+      {
+        "title": "RDX Sparring Boxing Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX T15 Training Gloves",
+        "score": 22
+      }
+    ],
+    "headCollectionMatchAll": false,
+    "gloveCollectionMatchAll": false,
+    "picked": []
+  },
+  {
+    "MSG": "Looking for sparring gloves and also need wraps, head guard, mouthguard, shin guards, gym bag",
+    "journey": null,
+    "normalized": "Looking for sparring gloves and also need wraps, head guard, mouthguard, shin guards, gym bag",
+    "extract": [
+      "looking",
+      "sparring",
+      "glove",
+      "also",
+      "need",
+      "wrap",
+      "head",
+      "guard",
+      "mouthguard",
+      "shin",
+      "gym",
+      "bag"
+    ],
+    "matchTerms": [
+      "looking",
+      "glove",
+      "also",
+      "need",
+      "wrap",
+      "head",
+      "guard",
+      "mouthguard",
+      "shin",
+      "gym",
+      "bag"
+    ],
+    "rewrite": {
+      "query": "Looking for sparring gloves and also need wraps, head guard, mouthguard, shin guards, gym bag",
+      "mergedFromContext": false
+    },
+    "fallbacks": [
+      "bag"
+    ],
+    "mode": "specific",
+    "filteredTitles": [
+      "RDX H1 Head Guard",
+      "RDX Kids Headguard"
+    ],
+    "filteredKind": "bag",
+    "ranked": [
+      {
+        "title": "RDX Gym Bag",
+        "score": 138
+      },
+      {
+        "title": "RDX H1 Head Guard",
+        "score": 80
+      },
+      {
+        "title": "RDX Kids Headguard",
+        "score": 80
+      },
+      {
+        "title": "RDX Shin Guards",
+        "score": 79
+      },
+      {
+        "title": "RDX Hand Wraps",
+        "score": 66
+      },
+      {
+        "title": "RDX Sparring Boxing Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX T15 Training Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX Mouth Guard",
+        "score": 20
+      }
+    ],
+    "headCollectionMatchAll": false,
+    "gloveCollectionMatchAll": false,
+    "picked": []
+  },
+  {
+    "MSG": "sparring boxing gloves and accessories like wraps head guard mouth guard",
+    "journey": {
+      "kind": "accessories",
+      "searchQuery": "hand wraps mouthguard"
+    },
+    "normalized": "sparring boxing gloves and accessories like wraps head guard mouth guard",
+    "extract": [
+      "sparring",
+      "boxing",
+      "glove",
+      "accessory",
+      "like",
+      "wrap",
+      "head",
+      "guard",
+      "mouth"
+    ],
+    "matchTerms": [
+      "glove",
+      "accessory",
+      "like",
+      "wrap",
+      "head",
+      "guard",
+      "mouth"
+    ],
+    "rewrite": {
+      "query": "sparring boxing gloves and accessories like wraps head guard mouth guard",
+      "mergedFromContext": false
+    },
+    "fallbacks": [
+      "mouth"
+    ],
+    "mode": "specific",
+    "filteredTitles": [
+      "RDX H1 Head Guard",
+      "RDX Kids Headguard"
+    ],
+    "filteredKind": "mouth",
+    "ranked": [
+      {
+        "title": "RDX H1 Head Guard",
+        "score": 80
+      },
+      {
+        "title": "RDX Kids Headguard",
+        "score": 80
+      },
+      {
+        "title": "RDX Hand Wraps",
+        "score": 66
+      },
+      {
+        "title": "RDX Mouth Guard",
+        "score": 34
+      },
+      {
+        "title": "RDX Sparring Boxing Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX T15 Training Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX Shin Guards",
+        "score": 20
+      },
+      {
+        "title": "RDX Gym Bag",
+        "score": 6
+      }
+    ],
+    "headCollectionMatchAll": false,
+    "gloveCollectionMatchAll": false,
+    "picked": []
+  },
+  {
+    "MSG": "what else do I need with sparring gloves wraps head guard",
+    "journey": {
+      "kind": "accessories",
+      "searchQuery": "hand wraps mouthguard"
+    },
+    "normalized": "what else do I need with sparring gloves wraps head guard",
+    "extract": [
+      "else",
+      "need",
+      "sparring",
+      "glove",
+      "wrap",
+      "head",
+      "guard"
+    ],
+    "matchTerms": [
+      "else",
+      "need",
+      "glove",
+      "wrap",
+      "head",
+      "guard"
+    ],
+    "rewrite": {
+      "query": "what else do I need with sparring gloves wraps head guard",
+      "mergedFromContext": false
+    },
+    "fallbacks": [
+      "guard"
+    ],
+    "mode": "specific",
+    "filteredTitles": [
+      "RDX H1 Head Guard",
+      "RDX Kids Headguard"
+    ],
+    "filteredKind": "guard",
+    "ranked": [
+      {
+        "title": "RDX H1 Head Guard",
+        "score": 80
+      },
+      {
+        "title": "RDX Kids Headguard",
+        "score": 80
+      },
+      {
+        "title": "RDX Hand Wraps",
+        "score": 66
+      },
+      {
+        "title": "RDX Sparring Boxing Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX T15 Training Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX Mouth Guard",
+        "score": 20
+      },
+      {
+        "title": "RDX Shin Guards",
+        "score": 20
+      },
+      {
+        "title": "RDX Gym Bag",
+        "score": -9
+      }
+    ],
+    "headCollectionMatchAll": false,
+    "gloveCollectionMatchAll": false,
+    "picked": []
+  },
+  {
+    "MSG": "complete the set with wraps head guard for my gloves",
+    "journey": {
+      "kind": "fbt",
+      "searchQuery": "boxing accessories hand wraps mouthguard"
+    },
+    "normalized": "complete the set with wraps head guard for my gloves",
+    "extract": [
+      "complete",
+      "set",
+      "wrap",
+      "head",
+      "guard",
+      "my",
+      "glove"
+    ],
+    "matchTerms": [
+      "complete",
+      "set",
+      "wrap",
+      "head",
+      "guard",
+      "my",
+      "glove"
+    ],
+    "rewrite": {
+      "query": "complete the set with wraps head guard for my gloves",
+      "mergedFromContext": false
+    },
+    "fallbacks": [
+      "gloves"
+    ],
+    "mode": "specific",
+    "filteredTitles": [
+      "RDX H1 Head Guard",
+      "RDX Kids Headguard"
+    ],
+    "filteredKind": "glove",
+    "ranked": [
+      {
+        "title": "RDX H1 Head Guard",
+        "score": 80
+      },
+      {
+        "title": "RDX Kids Headguard",
+        "score": 80
+      },
+      {
+        "title": "RDX Hand Wraps",
+        "score": 66
+      },
+      {
+        "title": "RDX Sparring Boxing Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX T15 Training Gloves",
+        "score": 22
+      },
+      {
+        "title": "RDX Mouth Guard",
+        "score": 20
+      },
+      {
+        "title": "RDX Shin Guards",
+        "score": 20
+      },
+      {
+        "title": "RDX Gym Bag",
+        "score": -9
+      }
+    ],
+    "headCollectionMatchAll": false,
+    "gloveCollectionMatchAll": false,
+    "picked": []
+  }
+]

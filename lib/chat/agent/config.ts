@@ -27,6 +27,12 @@ export const CATEGORY_PAYLOAD_PRODUCTS = 15;
 /** Explicit all/every/list requests: exact total + up to this many products. */
 export const LIST_PAYLOAD_PRODUCTS = 15;
 
+/**
+ * TEMP: order tracking is disabled. Flip to `true` to restore the
+ * deterministic tracking state machine, track_order tool, and API route.
+ */
+export const ORDER_TRACKING_ENABLED = false;
+
 /** Catalog tools whose (empty) results should drive the "no match" fallback. */
 export const CATALOG_TOOLS = new Set<string>([
   "search_catalog",

@@ -75,6 +75,7 @@ import {
   LARGE_PAYLOAD_CHARS,
   MAX_COMPLETION_TOKENS,
   MAX_TOOL_ROUNDS,
+  ORDER_TRACKING_ENABLED,
 } from "@/lib/chat/agent/config";
 import { tools } from "@/lib/chat/agent/tools";
 import { combineDeadline, getClient } from "@/lib/chat/agent/openai-client";
@@ -100,6 +101,7 @@ import {
   OFF_TOPIC_REPLY,
   ORDER_EMAIL_STILL_NEEDED_REPLY,
   ORDER_LOOKUP_FAILED_REPLY,
+  ORDER_TRACKING_UNAVAILABLE_REPLY,
   SERVICE_UNAVAILABLE_REPLY,
 } from "@/lib/chat/messaging/replies";
 
@@ -153,13 +155,17 @@ function round0ForceCatalogSearch(
 /** Stable intent labels persisted on the session / Mongo chat document. */
 function resolveTurnIntent(lastUser: string, session: ChatSession): string {
   if (
-    session.state === "awaiting_order_email" ||
-    session.state === "awaiting_order_number"
+    ORDER_TRACKING_ENABLED &&
+    (session.state === "awaiting_order_email" ||
+      session.state === "awaiting_order_number")
   ) {
     return "order_tracking";
   }
   if (isHumanEscalationRequest(lastUser)) return "human_support";
-  if (isOrderTrackingIntent(lastUser) || extractOrderLookupToken(lastUser)) {
+  if (
+    ORDER_TRACKING_ENABLED &&
+    (isOrderTrackingIntent(lastUser) || extractOrderLookupToken(lastUser))
+  ) {
     return "order_tracking";
   }
   if (isDiscountCodeQuery(lastUser)) return "discount_code";
@@ -249,8 +255,27 @@ export async function runChatAgent(
     return finishWithReply(session, HUMAN_ESCALATION_REPLY);
   }
 
+  // TEMP: order tracking disabled — clear any mid-flow state and short-circuit.
+  if (!ORDER_TRACKING_ENABLED) {
+    const trackingAsk =
+      session.state === "awaiting_order_email" ||
+      session.state === "awaiting_order_number" ||
+      isOrderTrackingIntent(lastUser) ||
+      Boolean(extractOrderLookupToken(lastUser));
+    if (
+      session.state === "awaiting_order_email" ||
+      session.state === "awaiting_order_number"
+    ) {
+      resetConversationState(session);
+    }
+    if (trackingAsk) {
+      setSessionIntent(session, "order_tracking");
+      return finishWithReply(session, ORDER_TRACKING_UNAVAILABLE_REPLY);
+    }
+  }
+
   // --- Explicit conversation state machine (not regex on assistant text) ---
-  if (session.state === "awaiting_order_email") {
+  if (ORDER_TRACKING_ENABLED && session.state === "awaiting_order_email") {
     setSessionIntent(session, "order_tracking");
     const email = extractEmailFromText(lastUser) ?? normalizeEmail(lastUser);
     const orderNumber = session.pendingOrderNumber;
@@ -274,7 +299,7 @@ export async function runChatAgent(
     }
   }
 
-  if (session.state === "awaiting_order_number") {
+  if (ORDER_TRACKING_ENABLED && session.state === "awaiting_order_number") {
     setSessionIntent(session, "order_tracking");
     if (isValidOrderNumberInput(lastUser)) {
       const orderNumber = normalizeOrderNumber(lastUser)!;
@@ -311,7 +336,7 @@ export async function runChatAgent(
     }
   }
 
-  if (isOrderTrackingIntent(lastUser)) {
+  if (ORDER_TRACKING_ENABLED && isOrderTrackingIntent(lastUser)) {
     setSessionIntent(session, "order_tracking");
     const embedded = extractOrderNumberFromText(lastUser);
     const email = extractEmailFromText(lastUser);
@@ -373,7 +398,9 @@ export async function runChatAgent(
   }
 
   // Bare order number (or "find/check 1001") → collect email for tracking
-  const orderLookupToken = extractOrderLookupToken(lastUser);
+  const orderLookupToken = ORDER_TRACKING_ENABLED
+    ? extractOrderLookupToken(lastUser)
+    : null;
   if (orderLookupToken) {
     setSessionIntent(session, "order_tracking");
     const email = extractEmailFromText(lastUser);

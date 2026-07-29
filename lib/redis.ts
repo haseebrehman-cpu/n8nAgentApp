@@ -5,10 +5,21 @@
  * - Supports redis:// and rediss:// (TLS) URLs
  * - Soft-fails when REDIS_URL is unset (local/dev) so the app still boots
  * - Logs connect success / failure clearly (URL redacted — never logs password)
+ *
+ * TEMP: `isRedisEnabled()` currently returns false so sessions, rate limit,
+ * and product caches use in-memory fallbacks. Flip that helper to re-enable.
  */
 
 import Redis from "ioredis";
 import { getRedisConfig } from "@/lib/config";
+
+/**
+ * TEMP: return `true` to restore Redis for sessions, rate limit, and caches.
+ * While false, all callers use in-memory fallbacks.
+ */
+function isRedisEnabled(): boolean {
+  return false;
+}
 
 const globalForRedis = globalThis as unknown as {
   __n8nappRedis?: Redis | null;
@@ -113,6 +124,8 @@ function createClient(url: string): Redis {
  * Callers must tolerate null (in-memory / no-cache fallback).
  */
 export async function getRedis(): Promise<Redis | null> {
+  if (!isRedisEnabled()) return null;
+
   const { url } = getRedisConfig();
   if (!url) return null;
 
@@ -183,6 +196,14 @@ export async function getRedis(): Promise<Redis | null> {
  * Always safe to call from the chat route — never throws.
  */
 export async function probeRedisStatus(): Promise<RedisStatusReport> {
+  if (!isRedisEnabled()) {
+    return {
+      status: "skipped",
+      detail:
+        "Redis temporarily disabled — rate limit & product cache use in-memory only",
+    };
+  }
+
   const { url, keyPrefix } = getRedisConfig();
 
   if (!url) {
@@ -233,5 +254,6 @@ export function redisKey(...parts: string[]): string {
 
 /** True when REDIS_URL is set (may still be reconnecting). */
 export function isRedisConfigured(): boolean {
+  if (!isRedisEnabled()) return false;
   return Boolean(getRedisConfig().url);
 }

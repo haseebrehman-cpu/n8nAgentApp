@@ -109,6 +109,33 @@ describe("runTool search_catalog modes", () => {
     expect(result).toContain(String(LIST_PAYLOAD_PRODUCTS));
   });
 
+  it("defaults to in-stock results for ordinary browse queries", async () => {
+    mockedSearch.mockResolvedValue({
+      compactJson: JSON.stringify({
+        productCount: 1,
+        products: [{ id: "1", title: "Punch Paddles" }],
+      }),
+      effectiveQuery: "punch paddles",
+      originalQuery: "punch paddles",
+      mode: "generic",
+      confidence: "high",
+      productCount: 1,
+      fallbackApplied: false,
+      reusedContext: false,
+    });
+
+    await runTool("search_catalog", { query: "punch paddles" }, {
+      lastUser: "How much do punch paddles cost",
+    });
+
+    expect(mockedSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "punch paddles",
+        availableOnly: true,
+      }),
+    );
+  });
+
   it("passes session search context into the orchestrator", async () => {
     mockedSearch.mockResolvedValue({
       compactJson: JSON.stringify({

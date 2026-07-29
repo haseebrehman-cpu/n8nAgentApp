@@ -16,6 +16,7 @@ export {
 export { classifySearchConfidence } from "@/lib/chat/search/confidence";
 export {
   normalizeSemanticQuery,
+  focusPrimaryProductQuery,
   rewriteSearchQuery,
   mergeRefinementIntoQuery,
   isSearchRefinement,

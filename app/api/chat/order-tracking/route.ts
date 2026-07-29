@@ -4,6 +4,7 @@ import {
   trackOrder,
   type OrderTrackingResult,
 } from "@/lib/chatbot/orderTracking";
+import { ORDER_TRACKING_ENABLED } from "@/lib/chat/agent/config";
 import { getClientIp } from "@/lib/http/client-ip";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -15,6 +16,17 @@ const MAX_ORDER_NUMBER_CHARS = 64;
 const MAX_EMAIL_CHARS = 254;
 
 export async function POST(req: NextRequest) {
+  if (!ORDER_TRACKING_ENABLED) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Order tracking is temporarily unavailable.",
+        errorCode: "order_tracking_disabled",
+      },
+      { status: 503 },
+    );
+  }
+
   const rate = await checkRateLimit(getClientIp(req), { bucket: "order" });
   if (!rate.allowed) {
     return NextResponse.json(

@@ -13,7 +13,7 @@
 
 import { ConfigError, getShopifyConfig } from "@/lib/config";
 
-export const SHOPIFY_API_VERSION = "2025-07";
+export const SHOPIFY_API_VERSION = "2026-07";
 
 /** Logical store regions for future multi-market support. */
 export type ShopifyStoreRegion = "default" | "fr" | "de" | "es" | "uk";

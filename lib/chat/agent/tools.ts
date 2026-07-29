@@ -7,9 +7,10 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import {
   CATEGORY_PAYLOAD_PRODUCTS,
   LIST_PAYLOAD_PRODUCTS,
+  ORDER_TRACKING_ENABLED,
 } from "@/lib/chat/agent/config";
 
-export const tools: ChatCompletionTool[] = [
+const ALL_TOOLS: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
@@ -32,7 +33,7 @@ export const tools: ChatCompletionTool[] = [
           availableOnly: {
             type: "boolean",
             description:
-              "When true, only return products available for sale / in stock. Default is false — include out-of-stock items so counts and lists match full inventory. Set true only when the customer explicitly asks for in-stock / available-only items.",
+              "When true, only return products available for sale / in stock. Default is true for ordinary browse and product searches; use false only when the customer explicitly asks to include out-of-stock items or see the full inventory/all products.",
           },
           forCount: {
             type: "boolean",
@@ -168,3 +169,10 @@ export const tools: ChatCompletionTool[] = [
     },
   },
 ];
+
+/** Tools exposed to the model — track_order omitted while order tracking is off. */
+export const tools: ChatCompletionTool[] = ORDER_TRACKING_ENABLED
+  ? ALL_TOOLS
+  : ALL_TOOLS.filter(
+      (t) => t.type !== "function" || t.function.name !== "track_order",
+    );

@@ -12,6 +12,7 @@ import {
   trackOrder,
 } from "@/lib/chatbot/orderTracking";
 import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
+import { ORDER_TRACKING_ENABLED } from "@/lib/chat/agent/config";
 import {
   ORDER_LOOKUP_FAILED_REPLY,
   ORDER_TRACKING_UNAVAILABLE_REPLY,
@@ -22,6 +23,9 @@ export async function lookupOrderReply(
   email: string,
   options: { region?: ShopifyStoreRegion; signal?: AbortSignal },
 ): Promise<string> {
+  if (!ORDER_TRACKING_ENABLED) {
+    return ORDER_TRACKING_UNAVAILABLE_REPLY;
+  }
   try {
     const result = await trackOrder(orderNumber, {
       email,

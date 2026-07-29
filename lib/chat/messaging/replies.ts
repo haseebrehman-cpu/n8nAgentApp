@@ -103,11 +103,11 @@ name@email.com`;
 
 export const ORDER_TRACKING_UNAVAILABLE_REPLY = `### Order tracking unavailable
 
-Order tracking is temporarily unavailable.
+Order tracking isn't available in chat right now.
 
 ### Next step
 
-Please try again in a little while.`;
+Ask to **speak with a human agent**, or contact support with your order number and checkout email. Meanwhile I can still help with products and policies.`;
 
 export const ORDER_LOOKUP_FAILED_REPLY = `### Lookup failed
 

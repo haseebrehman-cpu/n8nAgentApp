@@ -18,6 +18,8 @@ import {
   searchShopPoliciesAndFaqs,
 } from "@/lib/shopify/storefront-mcp";
 import { OrderTrackingError, trackOrder } from "@/lib/chatbot/orderTracking";
+import { ORDER_TRACKING_ENABLED } from "@/lib/chat/agent/config";
+import { ORDER_TRACKING_UNAVAILABLE_REPLY } from "@/lib/chat/messaging/replies";
 import type { ChatAttachment } from "@/lib/types";
 import type { ShopifyStoreRegion } from "@/services/shopify/credentials";
 import { fetchProductSizeChart } from "@/services/shopify/productSizeChart";
@@ -98,13 +100,28 @@ export async function runTool(
 ): Promise<string> {
   try {
     if (name === "search_catalog") {
-      const wantInStockOnly = /\b(in\s+stock|available\s+only)\b/i.test(
-        options.lastUser ?? "",
+      const lastUser = options.lastUser ?? "";
+      const explicitInStockRequest = /\b(in\s+stock|available\s+only)\b/i.test(
+        lastUser,
       );
+      const explicitFullInventoryRequest =
+        /\b(?:show|list|display|see|browse|find)\b/i.test(lastUser) &&
+        /\b(?:all|every|full|inventory|out(?:\s|-)?of(?:\s|-)?stock)\b/i.test(
+          lastUser,
+        );
+      const explicitOutOfStockRequest =
+        /\b(?:out(?:\s|-)?of(?:\s|-)?stock|include\s+all|full\s+inventory)\b/i.test(
+          lastUser,
+        );
       const availableOnly =
-        wantInStockOnly ||
         args.availableOnly === true ||
-        args.availableOnly === "true";
+        args.availableOnly === "true"
+          ? true
+          : explicitInStockRequest
+            ? true
+            : explicitFullInventoryRequest || explicitOutOfStockRequest
+              ? false
+              : true;
 
       const result = await executeSemanticSearch({
         query: String(args.query ?? ""),
@@ -187,7 +204,7 @@ export async function runTool(
 
       if (!singleId && ids.length === 0) {
         return JSON.stringify({
-          error: "invalid_product_id",
+          error: "id or ids is required",
           message:
             "id or ids is required and must be a real product/variant id from CONVERSATION CONTEXT or a prior tool result. Call search_catalog first if you do not have one.",
         });
@@ -321,6 +338,12 @@ export async function runTool(
     }
 
     if (name === "track_order") {
+      if (!ORDER_TRACKING_ENABLED) {
+        return JSON.stringify({
+          error: ORDER_TRACKING_UNAVAILABLE_REPLY,
+          hint: "Order tracking is disabled. Tell the customer it is unavailable in chat and offer human support.",
+        });
+      }
       const orderNumber = String(args.orderNumber ?? "").trim();
       const email = String(args.email ?? "").trim();
       if (!orderNumber) {

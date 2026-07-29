@@ -403,6 +403,35 @@ const OPTIONAL_SPORT_CONTEXT = new Set([
 /** Terms used for relevance matching (after dropping optional sport context). */
 export function matchTermsForQuery(query: string): string[] {
   const terms = extractProductTerms(query);
+  const hasGlove = terms.includes("glove");
+  const hasKitAccessory =
+    terms.includes("wrap") ||
+    terms.includes("bag") ||
+    ((terms.includes("head") ||
+      terms.includes("shin") ||
+      terms.includes("mouth") ||
+      terms.includes("groin")) &&
+      terms.includes("guard"));
+
+  // Kit asks ("gloves with wraps, head guard, bag"): keep the core product
+  // terms so accessory nouns don't become the filter "kind" or dominate rank.
+  if (hasGlove && hasKitAccessory) {
+    return terms.filter(
+      (t) =>
+        ![
+          "wrap",
+          "bag",
+          "head",
+          "shin",
+          "mouth",
+          "groin",
+          "gym",
+          "guard",
+          "matching",
+        ].includes(t),
+    );
+  }
+
   if (terms.includes("head") && terms.includes("guard")) {
     return terms.filter((t) => !OPTIONAL_SPORT_CONTEXT.has(t));
   }
@@ -533,7 +562,11 @@ export function filterProductsByQueryRelevance<
     return { products, filtered: false, kind: null };
   }
 
-  const kind = terms[terms.length - 1]!;
+  const kind = terms.includes("glove")
+    ? "glove"
+    : terms.includes("vest")
+      ? "vest"
+      : terms[terms.length - 1]!;
   const productKindTerms = new Set([
     "glove",
     "vest",
@@ -717,7 +750,11 @@ export function scoreProductRelevance(
     }
   }
 
-  const kind = terms[terms.length - 1];
+  const kind = terms.includes("glove")
+    ? "glove"
+    : terms.includes("vest")
+      ? "vest"
+      : terms[terms.length - 1];
   if (
     kind &&
     ["glove", "guard", "vest", "bag", "wrap", "shoe", "boot", "mat"].includes(
@@ -727,6 +764,14 @@ export function scoreProductRelevance(
     !terms.some((t) => t !== kind && titleHasTerm(title, t))
   ) {
     score -= 15;
+  }
+
+  // Strong boost when the product matches the primary shoppable kind (gloves
+  // in a kit ask), so accessories cannot outrank the main request.
+  if (kind === "glove" && titleHasTerm(title, "glove")) {
+    score += 40;
+  } else if (kind === "glove" && titleHasTerm(title, "guard")) {
+    score -= 25;
   }
 
   score += Math.max(0, 8 - originalIndex * 0.35);

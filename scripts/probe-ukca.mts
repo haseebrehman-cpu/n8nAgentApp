@@ -9,15 +9,15 @@ for (const line of readFileSync(".env", "utf8").split(/\r?\n/)) {
   if (!process.env[key]) process.env[key] = val;
 }
 
-import { getStoreCollections } from "../lib/shopify/collection-directory.ts";
+import { getStoreCollections } from "../lib/shopify/collection-directory";
 import {
   resolveCategoryCollections,
   fetchStorefrontCollectionsMerged,
-} from "../lib/shopify/storefront-collection.ts";
-import { searchCatalog } from "../lib/shopify/storefront-mcp.ts";
-import { compactCatalogMcpText } from "../lib/shopify/compact-catalog.ts";
-import { searchCatalogForCount } from "../lib/chat/agent/catalog-count.ts";
-import { runTool } from "../lib/chat/agent/tool-runner.ts";
+} from "../lib/shopify/storefront-collection";
+import { searchCatalog } from "../lib/shopify/storefront-mcp";
+import { compactCatalogMcpText } from "../lib/shopify/compact-catalog";
+import { searchCatalogForCount } from "../lib/chat/agent/catalog-count";
+import { runTool } from "../lib/chat/agent/tool-runner";
 
 const lines: string[] = [];
 function log(...args: unknown[]) {

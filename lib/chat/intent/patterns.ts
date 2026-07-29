@@ -14,8 +14,8 @@ export const ORDER_TRACKING_INTENT_RE =
  * (e.g. "rdx bomb", "how to make rdx"). Always refuse those and redirect. Kept
  * to unambiguous terms so real combat-sports/fitness products are never blocked.
  */
-// export const HARMFUL_QUERY_RE =
-//   /\b(bombs?|explosives?|detonat\w*|grenades?|c-?4|tnt|dynamite|ied|gunpowder|ammunition|firearms?|pistols?|rifles?|handguns?|shotguns?|silencers?|molotov|napalm|anthrax|nerve\s+agent|sarin|ricin|poison\w*|meth(?:amphetamine)?|cocaine|heroin|fentanyl|assassinat\w*|terroris\w*|how\s+to\s+(?:make|build|create)\s+(?:a\s+|an\s+|the\s+)?(?:bomb|rdx|explosive|weapon))\b/i;
+export const HARMFUL_QUERY_RE =
+  /\b(bombs?|explosives?|detonat\w*|grenades?|c-?4|tnt|dynamite|ied|gunpowder|ammunition|firearms?|pistols?|rifles?|handguns?|shotguns?|silencers?|molotov|napalm|anthrax|nerve\s+agent|sarin|ricin|poison\w*|meth(?:amphetamine)?|cocaine|heroin|fentanyl|assassinat\w*|terroris\w*|how\s+to\s+(?:make|build|create)\s+(?:a\s+|an\s+|the\s+)?(?:bomb|rdx|explosive|weapon))\b/i;
 
 /** Common single-word typos → intended browse terms (applied before search). */
 export const QUERY_TYPO_MAP: Record<string, string> = {
@@ -25,6 +25,19 @@ export const QUERY_TYPO_MAP: Record<string, string> = {
   boxnig: "boxing",
   glovse: "gloves",
   glooves: "gloves",
+  glovs: "gloves",
+  glovea: "gloves",
+  sparrin: "sparring",
+  beginer: "beginner",
+  begginer: "beginner",
+  lether: "leather",
+  shein: "shin",
+  shinguard: "shin guard",
+  headgeer: "headgear",
+  mouthgaurd: "mouthguard",
+  mouthgard: "mouthguard",
+  acessories: "accessories",
+  acessory: "accessory",
 };
 
 /**
@@ -34,18 +47,36 @@ export const QUERY_TYPO_MAP: Record<string, string> = {
 export const PRODUCT_MODEL_CODE_RE = /\b[a-z]{1,3}\d{1,4}[a-z]{0,2}\b/i;
 
 /**
- * Bare category browse phrases that should usually search immediately.
- * Very broad terms that need a clarifying follow-up first ("gloves",
- * "equipment", "gym equipment") are handled by needsProductClarification
- * and excluded from force-search even when listed here.
+ * Ultra-broad sport / department words that need ONE clarifying question
+ * before catalog search (e.g. bare "boxing").
+ */
+export const BROAD_TOPIC_PHRASES = new Set<string>([
+  "boxing",
+  "mma",
+  "fitness",
+  "yoga",
+  "kids",
+  "apparel",
+  "clothing",
+  "equipment",
+  "gym equipment",
+  "fitness equipment",
+  "protection",
+  "accessories",
+  "nutrition",
+  "protein",
+  "sauna",
+]);
+
+/**
+ * Category browse phrases that should usually search immediately once
+ * clarification is not required. Ultra-broad sports/departments ("boxing",
+ * "mma", "fitness", "gloves", "equipment") are handled by
+ * needsProductClarification / BROAD_TOPIC_PHRASES and must NOT force search.
  */
 export const CATEGORY_BROWSE_PHRASES = new Set<string>([
-  "boxing",
-  "gloves",
-  "glove",
   "boxing gloves",
   "boxing glove",
-  "mma",
   "mma gloves",
   "mma glove",
   "shoes",
@@ -78,29 +109,16 @@ export const CATEGORY_BROWSE_PHRASES = new Set<string>([
   "kids head guards",
   "shin guards",
   "shin guard",
-  "fitness",
-  "yoga",
   "yoga mats",
   "yoga mat",
   "lifting gloves",
   "lifting glove",
-  "apparel",
-  "kids",
   "kids gloves",
   "kids boxing gloves",
-  "sauna",
-  "protein",
-  "nutrition",
-  "equipment",
-  "accessories",
   "belts",
   "belt",
-  "clothing",
-  "gym equipment",
-  "protection",
   "mouthguard",
   "mouthguards",
   "beginner boxing kit",
   "boxing kit",
-  "show boxing",
 ]);

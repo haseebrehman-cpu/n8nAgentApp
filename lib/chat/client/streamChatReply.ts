@@ -9,6 +9,7 @@
  */
 
 import { sanitizeChatAttachments } from "@/lib/chat/attachments";
+import { polishCustomerReply } from "@/lib/chat/messaging/polish";
 import { stripAssistantMedia } from "@/lib/sanitize";
 import type { ChatAttachment } from "@/lib/types";
 
@@ -72,7 +73,7 @@ export async function streamChatReply(
     } | null;
     const attachments = sanitizeChatAttachments(data?.attachments);
     onAssistantContent(
-      stripAssistantMedia(data?.reply || data?.error || NO_REPLY_FALLBACK),
+      polishCustomerReply(data?.reply || data?.error || NO_REPLY_FALLBACK),
       attachments.length ? { attachments } : undefined,
     );
     return;
@@ -102,7 +103,7 @@ export async function streamChatReply(
           assembled = event.reply;
           const attachments = sanitizeChatAttachments(event.attachments);
           onAssistantContent(
-            stripAssistantMedia(assembled),
+            polishCustomerReply(assembled),
             attachments.length ? { attachments } : undefined,
           );
         } else if (event.type === "error") {

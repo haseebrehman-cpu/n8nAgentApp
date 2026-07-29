@@ -32,6 +32,11 @@ export interface ChatSession {
   pendingCategory: string | null;
   /** Products most recently shown — resolves follow-ups like "these in red". */
   lastShownProducts: ShownProduct[] | null;
+  /**
+   * Last successful catalog search query (after rewrite). Used to merge
+   * attribute follow-ups ("only blue ones") into a full semantic query.
+   */
+  lastSearchQuery: string | null;
   updatedAt: number;
 }
 
@@ -80,6 +85,7 @@ function emptySession(id: string): ChatSession {
     pendingOrderNumber: null,
     pendingCategory: null,
     lastShownProducts: null,
+    lastSearchQuery: null,
     updatedAt: Date.now(),
     intent: null,
     promptTokens: 0,
@@ -110,6 +116,11 @@ async function loadSession(id: string): Promise<ChatSession | null> {
         lastShownProducts: Array.isArray(parsed.lastShownProducts)
           ? parsed.lastShownProducts
           : null,
+        lastSearchQuery:
+          typeof parsed.lastSearchQuery === "string" &&
+          parsed.lastSearchQuery.trim()
+            ? parsed.lastSearchQuery.trim()
+            : null,
         updatedAt: parsed.updatedAt ?? Date.now(),
         intent: parsed.intent ?? null,
         promptTokens: asNonNegativeInt(parsed.promptTokens),
@@ -283,6 +294,14 @@ export function setLastShownProducts(
 ): void {
   session.lastShownProducts =
     products && products.length > 0 ? products : null;
+}
+
+/** Remember (or clear) the last catalog search query for follow-up merge. */
+export function setLastSearchQuery(
+  session: ChatSession,
+  query: string | null,
+): void {
+  session.lastSearchQuery = query?.trim() ? query.trim() : null;
 }
 
 /** Cookie attributes for the session id. */

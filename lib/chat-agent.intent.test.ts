@@ -51,12 +51,13 @@ describe("isDiscountCodeQuery", () => {
 });
 
 describe("isAmbiguousBrowseQuery", () => {
-  it("flags bare category phrases", () => {
-    expect(isAmbiguousBrowseQuery("boxing")).toBe(true);
-    expect(isAmbiguousBrowseQuery("gloves")).toBe(true);
+  it("flags concrete category phrases, not ultra-broad sports", () => {
+    expect(isAmbiguousBrowseQuery("boxing")).toBe(false);
+    expect(isAmbiguousBrowseQuery("gloves")).toBe(false);
+    expect(isAmbiguousBrowseQuery("mma")).toBe(false);
     expect(isAmbiguousBrowseQuery("boxing gloves")).toBe(true);
     expect(isAmbiguousBrowseQuery("Boxing Gloves?")).toBe(true);
-    expect(isAmbiguousBrowseQuery("mma")).toBe(true);
+    expect(isAmbiguousBrowseQuery("head guards")).toBe(true);
   });
 
   it("does not flag explicit list/count or already-narrow queries", () => {
@@ -141,6 +142,8 @@ describe("isCategoryBrowseQuery / resolveCatalogResponseMode", () => {
 
 describe("needsProductClarification", () => {
   it("flags ultra-broad shopping asks", () => {
+    expect(needsProductClarification("boxing")).toBe(true);
+    expect(needsProductClarification("mma")).toBe(true);
     expect(needsProductClarification("gloves")).toBe(true);
     expect(needsProductClarification("I need gloves")).toBe(true);
     expect(needsProductClarification("I need protection")).toBe(true);
@@ -173,7 +176,7 @@ describe("shouldForceProductSearch", () => {
 
   it("forces search for clear category browse, not ultra-broad clarifies", () => {
     expect(shouldForceProductSearch("boxing gloves")).toBe(true);
-    expect(shouldForceProductSearch("boxing")).toBe(true);
+    expect(shouldForceProductSearch("boxing")).toBe(false); // clarify first
     expect(shouldForceProductSearch("head guards")).toBe(true);
     expect(shouldForceProductSearch("gloves")).toBe(false);
     expect(shouldForceProductSearch("I need gloves")).toBe(false);

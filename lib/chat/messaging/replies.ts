@@ -1,52 +1,161 @@
 /**
  * Customer-facing canned replies used by the agent for deterministic responses
  * (safety refusals, off-topic redirects, order-tracking prompts, fallbacks).
- * Centralised so copy lives in one place and is easy to review and localise.
+ * Formatted to match RESPONSE_FORMAT_RULES (headings, short paragraphs, bullets).
  */
 
 export const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "our store";
 
-export const FALLBACK_REPLY =
-  "I'm sorry, I couldn't complete that request. Could you rephrase it or try again?";
+export const FALLBACK_REPLY = `### Something went wrong
 
-export const NOT_AVAILABLE_REPLY =
-  "I'd be happy to help you find the right product. Could you tell me a bit more about what you're looking for — for example a category, size, or product name?";
+I couldn't complete that request just now.
 
-export const DISCOUNT_CODE_REPLY =
-  "We don't share discount or coupon codes in chat. I can show you products that are currently on sale at a reduced price if that helps.";
+### Next step
 
-export const OFF_TOPIC_REPLY = `I'm here to help with ${STORE_NAME} products only — boxing, MMA, combat sports, and fitness gear. If you're looking for equipment, product information, pricing, sizes, stock, or recommendations, I'd be happy to help.`;
+Could you rephrase it, or tell me the product or category you're looking for?`;
+
+export const NOT_AVAILABLE_REPLY = `### Let's find the right product
+
+I don't have a clear match for that yet.
+
+### What helps me search
+
+- A category (boxing gloves, head guards, yoga mats…)
+- A model name (F4, T15, Kara…)
+- Size, colour, or use (sparring, bag work, beginners)
+
+### Next step
+
+What are you shopping for today?`;
+
+export const DISCOUNT_CODE_REPLY = `### Discount codes
+
+We don't share discount or coupon codes in chat.
+
+### What I can do
+
+I can show products that are **currently on sale** at a reduced price.
+
+### Next step
+
+Would you like to see what's on sale right now?`;
+
+export const OFF_TOPIC_REPLY = `### ${STORE_NAME} shopping help
+
+I only help with ${STORE_NAME} products — boxing, MMA, combat sports, and fitness gear.
+
+### I can help with
+
+- Product information and recommendations
+- Pricing, sizes, and stock
+- Store policies and order tracking
+
+### Next step
+
+What gear are you looking for?`;
 
 /**
  * Firm, safe reply for dangerous, illegal, or clearly harmful requests. "RDX"
  * is our brand name but is also a military explosive, so shoppers sometimes
  * pair it with bombs/weapons/etc. — never engage, always redirect to shopping.
  */
-export const HARMFUL_QUERY_REPLY = `I can't help with that. I'm here to help you shop with ${STORE_NAME} — our products, store policies, and order tracking. Is there something I can help you find today?`;
+export const HARMFUL_QUERY_REPLY = `### I can't help with that
 
-export const ASK_ORDER_NUMBER_REPLY =
-  "Sure — I can help track that. What's your order number?";
+I'm here to help you shop with ${STORE_NAME} — our products, store policies, and order tracking.
 
-export const ASK_ORDER_EMAIL_REPLY =
-  "Thanks. What's the email address you used when you placed the order?";
+### Next step
 
-export const ASK_ORDER_NUMBER_CLARIFY_REPLY =
-  "Happy to help track that. Please share your order number (for example 1001, #1001, or OT-cbn4m39wmd).";
+Is there equipment or a product I can help you find today?`;
 
-export const ORDER_EMAIL_STILL_NEEDED_REPLY =
-  "I still need the email address you used when placing the order — for example name@email.com.";
+export const ASK_ORDER_NUMBER_REPLY = `### Order tracking
 
-export const ORDER_TRACKING_UNAVAILABLE_REPLY =
-  "Order tracking is temporarily unavailable. Please try again later.";
+I can look that up for you.
 
-export const ORDER_LOOKUP_FAILED_REPLY =
-  "We couldn't look up that order right now. Please try again shortly.";
+### Next step
 
-export const CONTENT_FILTERED_REPLY =
-  "I couldn't complete that reply. Please try rephrasing your question.";
+What's your order number?`;
+
+export const ASK_ORDER_EMAIL_REPLY = `### Almost there
+
+I still need the email used at checkout.
+
+### Next step
+
+What email address did you use when placing the order?`;
+
+export const ASK_ORDER_NUMBER_CLARIFY_REPLY = `### Order tracking
+
+Please share your order number so I can look it up.
+
+### Examples
+
+- 1001
+- #1001
+- OT-cbn4m39wmd`;
+
+export const ORDER_EMAIL_STILL_NEEDED_REPLY = `### Email still needed
+
+I need the email address used when placing the order.
+
+### Example
+
+name@email.com`;
+
+export const ORDER_TRACKING_UNAVAILABLE_REPLY = `### Order tracking unavailable
+
+Order tracking is temporarily unavailable.
+
+### Next step
+
+Please try again in a little while.`;
+
+export const ORDER_LOOKUP_FAILED_REPLY = `### Lookup failed
+
+We couldn't look up that order right now.
+
+### Next step
+
+Please try again shortly, or share the order number and checkout email again.`;
+
+export const CONTENT_FILTERED_REPLY = `### Couldn't complete that reply
+
+I couldn't finish that answer.
+
+### Next step
+
+Please try rephrasing your question.`;
+
+/** Infra / timeout / MCP failure — never expose internal error details. */
+export const SERVICE_UNAVAILABLE_REPLY = `### Temporarily unavailable
+
+I'm having trouble reaching the product catalog right now.
+
+### Next step
+
+Please try again in a moment — or tell me the product name and I'll retry.`;
+
+/** Soft redirect for clear jailbreak / prompt-injection attempts. */
+export const INJECTION_REDIRECT_REPLY = `### ${STORE_NAME} shopping help
+
+I can help with products, sizing, stock, policies, and order tracking.
+
+### Next step
+
+What are you looking for today?`;
 
 /**
  * Reply when the customer explicitly asks for a human. Escalate immediately
  * rather than looping them through the assistant.
  */
-export const HUMAN_ESCALATION_REPLY = `Of course — I'll connect you with our ${STORE_NAME} support team. They'll follow up as soon as they can. In the meantime, if you have an order number and the email used at checkout handy, it'll help them assist you faster. Is there anything I can look into for you while you wait?`;
+export const HUMAN_ESCALATION_REPLY = `### Connecting you with support
+
+I'll connect you with our ${STORE_NAME} support team. They'll follow up as soon as they can.
+
+### Helpful to have ready
+
+- Your order number
+- The email used at checkout
+
+### Meanwhile
+
+Is there a product, size, or order detail I can look into for you while you wait?`;

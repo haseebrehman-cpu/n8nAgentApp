@@ -16,6 +16,7 @@ function makeSession(): ChatSession {
     pendingOrderNumber: null,
     pendingCategory: null,
     lastShownProducts: null,
+    lastSearchQuery: null,
     updatedAt: Date.now(),
     intent: null,
     promptTokens: 0,

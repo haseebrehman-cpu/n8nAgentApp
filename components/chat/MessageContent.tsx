@@ -76,6 +76,13 @@ export default function MessageContent({ content }: { content: string }) {
               {children}
             </p>
           ),
+          // Never render markdown tables — sales replies use headings + bullets.
+          table: () => null,
+          thead: () => null,
+          tbody: () => null,
+          tr: () => null,
+          th: () => null,
+          td: () => null,
         }}
       >
         {cleaned}

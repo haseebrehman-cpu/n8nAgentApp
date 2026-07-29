@@ -18,7 +18,8 @@ export interface ShownProduct {
   price: string | null;
   wasPrice: string | null;
   url: string | null;
-  inStock: boolean;
+  /** null when catalog omitted availability — do not claim OOS. */
+  inStock: boolean | null;
   onSale: boolean;
 }
 
@@ -48,7 +49,8 @@ function toShownProduct(raw: CatalogProductShape): ShownProduct | null {
         ? raw.wasPrice
         : null,
     url: typeof raw.url === "string" && raw.url.trim() ? raw.url.trim() : null,
-    inStock: raw.inStock === true,
+    inStock:
+      typeof raw.inStock === "boolean" ? raw.inStock : null,
     onSale: raw.onSale === true,
   };
 }
@@ -85,6 +87,12 @@ export function extractShownProducts(toolResult: string): ShownProduct[] {
   return shown;
 }
 
+export interface ContextBlockOptions {
+  lastSearchQuery?: string | null;
+  /** Active category / topic (e.g. "boxing gloves") for topic continuity. */
+  pendingCategory?: string | null;
+}
+
 /**
  * Build a trusted system message describing the recently shown products so the
  * model can resolve pronouns/follow-ups. Returns null when there is nothing to
@@ -92,29 +100,50 @@ export function extractShownProducts(toolResult: string): ShownProduct[] {
  */
 export function buildContextBlock(
   products: ShownProduct[] | null | undefined,
+  lastSearchQueryOrOptions?: string | null | ContextBlockOptions,
 ): string | null {
   if (!products || products.length === 0) return null;
+
+  const options: ContextBlockOptions =
+    typeof lastSearchQueryOrOptions === "string" ||
+    lastSearchQueryOrOptions == null
+      ? { lastSearchQuery: lastSearchQueryOrOptions }
+      : lastSearchQueryOrOptions;
 
   const lines = products.map((p, i) => {
     const price = p.price ? ` — ${p.price}` : "";
     const wasPrice = p.wasPrice ? ` (was ${p.wasPrice})` : "";
-    const stock = p.inStock ? " — In stock" : " — Out of stock";
+    const stock =
+      typeof p.inStock === "boolean"
+        ? p.inStock
+          ? " — In stock"
+          : " — Out of stock"
+        : "";
     const sale = p.onSale ? " — On sale" : "";
     return `${i + 1}. ${p.title}${price}${wasPrice}${stock}${sale} (id: ${p.id})`;
   });
 
+  const lastQueryLine = options.lastSearchQuery?.trim()
+    ? `\nLast catalog search query: "${options.lastSearchQuery.trim()}"\n`
+    : "";
+  const topicLine = options.pendingCategory?.trim()
+    ? `Active topic / category: "${options.pendingCategory.trim()}"\n`
+    : "";
+
   return `CONVERSATION CONTEXT (trusted — for resolving ALL customer follow-ups; do not repeat verbatim or expose ids to the customer):
 These are the products you most recently showed the customer.
-
-GENERAL CONTEXT RESOLUTION (CRITICAL):
-- Use THIS context and conversation history to answer ANY follow-up, comparative, selection, or filtering question about these products (e.g., price, lowest/highest price, discounts, stock, size/weight, model, features, materials, use-case, suitability, or comparisons like "which of them...", "compare the first two", "are any for kids?", "which is lightest?").
-- DO NOT call search_catalog for questions about products already in this list or conversation history. Answer directly using the details provided in context and previous turns.
-- ACCURACY FOR PRICING & DISCOUNTS:
-  * Prices: Read all product prices carefully before stating which has the lowest or highest price.
-  * Discounts: A product is on sale/discounted ONLY if it has an explicit "was-price" or "On sale" tag. If none of the listed products are on sale, state clearly that none are currently discounted. Never confuse the lowest price item with a discounted item.
-- FOR SPECIFIC VARIANT / SPEC DETAILS: If the user asks for deeper specifications or color/size options not listed in context, call get_product or lookup_catalog with the product's id.
-- FOR EXACT INVENTORY UNITS: Call get_inventory with the product's id.
-- FOR SIZE CHARTS: Call get_size_chart with the product's id.
+${topicLine}${lastQueryLine}
+FOLLOW-UP RULES (CRITICAL):
+- Answer compare / cheaper / colour / size / "which one" questions from THIS list first.
+- "show cheaper ones" → pick the lower-priced items from this list (do not restart a new unrelated search).
+- "only blue" / "16 oz" / "leather" → filter this list or merge with Last catalog search query.
+- "back to the F4" / "the gloves from earlier" → resolve from this list + chat history.
+- New unrelated topics ("actually show shin guards") → new search_catalog; keep this memory for later.
+- DO NOT call search_catalog for pure rank/compare/filter of products already listed — answer from context.
+- Format with response templates: ### headings, hyphen bullets, max 2 sentences per paragraph. No tables. No ids in customer text.
+- Pricing: read prices carefully. On sale ONLY with was-price / On sale tag.
+- Deeper variants/specs → get_product with id. Exact units → get_inventory. Size chart → get_size_chart.
+- After helping, at most ONE soft cross-sell (e.g. wraps with gloves) from real catalog data.
 
 Product List:
 ${lines.join("\n")}`;

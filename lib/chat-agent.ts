@@ -22,7 +22,9 @@ import {
   appendAssistantMessage,
   resetConversationState,
   setConversationState,
+  setLastSearchQuery,
   setLastShownProducts,
+  setPendingCategory,
   setSessionIntent,
 } from "@/lib/chat/session";
 import {
@@ -31,10 +33,20 @@ import {
   type ShownProduct,
 } from "@/lib/chat/context/product-memory";
 import { logger } from "@/lib/logger";
-import { stripAssistantMedia } from "@/lib/sanitize";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import type { ChatAgentResult, ChatAttachment, ChatMessagePayload } from "@/lib/types";
 import type { RunChatAgentOptions } from "@/lib/chat/types";
+import { polishCustomerReply } from "@/lib/chat/messaging/polish";
+import {
+  ADDRESS_CHANGE_REPLY,
+  CONTACT_SUPPORT_REPLY,
+  GOODBYE_REPLY,
+  GREETING_REPLY,
+  ORDER_CANCEL_REPLY,
+  ORDER_MODIFY_REPLY,
+  THANKS_REPLY,
+} from "@/lib/chat/messaging/journey-replies";
+import { buildClarificationReply } from "@/lib/chat/conversation/flow";
 import {
   extractEmailFromText,
   extractOrderLookupToken,
@@ -43,11 +55,16 @@ import {
   isAmbiguousBrowseQuery,
   isDiscountCodeQuery,
   isDiscountQuery,
-  // isHarmfulQuery,
+  isHarmfulQuery,
   isHumanEscalationRequest,
+  isInventoryQuantityQuery,
   isOffTopicQuery,
   isOrderTrackingIntent,
   isProductFollowUpQuery,
+  isPromptInjectionAttempt,
+  journeyForcesCatalogSearch,
+  needsProductClarification,
+  resolveCustomerJourney,
   shouldForceProductSearch,
   stripOrderTrackingPhrases,
 } from "@/lib/chat/intent";
@@ -63,8 +80,12 @@ import { tools } from "@/lib/chat/agent/tools";
 import { combineDeadline, getClient } from "@/lib/chat/agent/openai-client";
 import { runTool } from "@/lib/chat/agent/tool-runner";
 import { lookupOrderReply } from "@/lib/chat/agent/order-lookup";
-import { extractCatalogData } from "@/lib/chat/agent/mcp-format";
-import { getOpenAIConfig } from "@/lib/config";
+import { getOpenAIConfig, getShopifyConfig } from "@/lib/config";
+import {
+  isCatalogInfraFailure,
+  isEmptyCatalogResult,
+} from "@/lib/chat/search";
+import { isSearchRefinement } from "@/lib/chat/search/query-rewrite";
 import {
   ASK_ORDER_EMAIL_REPLY,
   ASK_ORDER_NUMBER_CLARIFY_REPLY,
@@ -72,11 +93,14 @@ import {
   CONTENT_FILTERED_REPLY,
   DISCOUNT_CODE_REPLY,
   FALLBACK_REPLY,
-  // HARMFUL_QUERY_REPLY,
+  HARMFUL_QUERY_REPLY,
   HUMAN_ESCALATION_REPLY,
+  INJECTION_REDIRECT_REPLY,
   NOT_AVAILABLE_REPLY,
   OFF_TOPIC_REPLY,
   ORDER_EMAIL_STILL_NEEDED_REPLY,
+  ORDER_LOOKUP_FAILED_REPLY,
+  SERVICE_UNAVAILABLE_REPLY,
 } from "@/lib/chat/messaging/replies";
 
 export * from "@/lib/chat/intent";
@@ -91,7 +115,7 @@ function finishWithReply(
   pendingOrderNumber: string | null = null,
   attachments?: ChatAttachment[],
 ): ChatAgentResult {
-  const cleaned = stripAssistantMedia(reply) || FALLBACK_REPLY;
+  const cleaned = polishCustomerReply(reply) || FALLBACK_REPLY;
   appendAssistantMessage(session, cleaned);
   if (nextState === "idle") {
     resetConversationState(session);
@@ -101,6 +125,29 @@ function finishWithReply(
   return attachments?.length
     ? { reply: cleaned, attachments }
     : { reply: cleaned };
+}
+
+/**
+ * Whether the first OpenAI round must call search_catalog before answering.
+ * Keeps inventory/size-chart/clarification turns on tool_choice:auto.
+ */
+function round0ForceCatalogSearch(
+  lastUser: string,
+  productIntent: boolean,
+  contextOnlyFollowUp: boolean,
+): boolean {
+  if (!productIntent) return false;
+  if (contextOnlyFollowUp) return false;
+  if (needsProductClarification(lastUser)) return false;
+  if (isInventoryQuantityQuery(lastUser)) return false;
+  if (/\b(size\s+chart|size\s+guide|sizing\s+chart)\b/i.test(lastUser)) {
+    return false;
+  }
+  // Discount browse still needs catalog retrieval.
+  if (isDiscountQuery(lastUser)) return true;
+  // shouldForceProductSearch already includes clear category browse and
+  // excludes ultra-broad clarify-first phrases ("boxing", "gloves", …).
+  return shouldForceProductSearch(lastUser);
 }
 
 /** Stable intent labels persisted on the session / Mongo chat document. */
@@ -147,14 +194,53 @@ export async function runChatAgent(
 
   // Safety first: refuse dangerous/illegal requests before any tool routing.
   // "RDX" is our brand but also an explosive, so guard against misuse.
-  // if (isHarmfulQuery(lastUser)) {
-  //   setSessionIntent(session, "off_topic");
-  //   return finishWithReply(session, HARMFUL_QUERY_REPLY);
-  // }
+  if (isHarmfulQuery(lastUser)) {
+    setSessionIntent(session, "off_topic");
+    return finishWithReply(session, HARMFUL_QUERY_REPLY);
+  }
+
+  if (isPromptInjectionAttempt(lastUser)) {
+    logger.warn("chat-agent", "prompt injection attempt blocked", {
+      requestId,
+    });
+    setSessionIntent(session, "general");
+    return finishWithReply(session, INJECTION_REDIRECT_REPLY);
+  }
 
   if (isDiscountCodeQuery(lastUser)) {
     setSessionIntent(session, "discount_code");
     return finishWithReply(session, DISCOUNT_CODE_REPLY);
+  }
+
+  // Ecommerce journey short-circuits (social + post-purchase limits).
+  const journey = resolveCustomerJourney(lastUser);
+  if (journey?.kind === "greeting") {
+    setSessionIntent(session, "general");
+    return finishWithReply(session, GREETING_REPLY);
+  }
+  if (journey?.kind === "thanks") {
+    setSessionIntent(session, "general");
+    return finishWithReply(session, THANKS_REPLY);
+  }
+  if (journey?.kind === "goodbye") {
+    setSessionIntent(session, "general");
+    return finishWithReply(session, GOODBYE_REPLY);
+  }
+  if (journey?.kind === "order_cancel") {
+    setSessionIntent(session, "order_support");
+    return finishWithReply(session, ORDER_CANCEL_REPLY);
+  }
+  if (journey?.kind === "order_modify") {
+    setSessionIntent(session, "order_support");
+    return finishWithReply(session, ORDER_MODIFY_REPLY);
+  }
+  if (journey?.kind === "address_change") {
+    setSessionIntent(session, "order_support");
+    return finishWithReply(session, ADDRESS_CHANGE_REPLY);
+  }
+  if (journey?.kind === "contact_support") {
+    setSessionIntent(session, "human_support");
+    return finishWithReply(session, CONTACT_SUPPORT_REPLY);
   }
 
   // Human handoff: escalate immediately rather than looping the customer.
@@ -316,28 +402,109 @@ export async function runChatAgent(
     return finishWithReply(session, OFF_TOPIC_REPLY);
   }
 
-  // Used only for the honest "no results" fallback below — the advisor decides
-  // for itself whether to retrieve (no forced search).
+  const hasShown = Boolean(session.lastShownProducts?.length);
+
+  // Ultra-broad topics ("boxing", "gloves") → one clarifying question, no search.
+  // Skip when they already have a product thread (they may be changing topic with
+  // a short word — still clarify rather than dumping the whole sport catalog).
+  if (
+    needsProductClarification(lastUser) &&
+    !isProductFollowUpQuery(lastUser) &&
+    !isDiscountQuery(lastUser)
+  ) {
+    setSessionIntent(session, "product_information");
+    setPendingCategory(session, lastUser.trim());
+    return finishWithReply(session, buildClarificationReply(lastUser));
+  }
+
+  // Used for the honest "no results" fallback and for forcing semantic search.
   const productIntent =
     shouldForceProductSearch(lastUser) ||
     isDiscountQuery(lastUser) ||
     (isProductFollowUpQuery(lastUser) && hasRecentProductContext(history));
 
+  /**
+   * Force search_catalog on the first tool round for clear product discovery.
+   * Skip when: clarification needed, inventory/size follow-ups, or pure
+   * context Q&A about already-shown products (not attribute refinements that
+   * still need a rewritten search / context filter via the tool).
+   */
+  const refinementNeedsTool =
+    (isSearchRefinement(lastUser, session.lastSearchQuery) ||
+      isProductFollowUpQuery(lastUser)) &&
+    hasShown &&
+    /\b(cheaper|cheapest|only\s+\w+|just\s+\w+|\d{1,2}\s*oz|blue|red|black|green|leather)\b/i.test(
+      lastUser,
+    );
+  const contextOnlyFollowUp =
+    isProductFollowUpQuery(lastUser) &&
+    hasShown &&
+    !refinementNeedsTool &&
+    !shouldForceProductSearch(lastUser);
+  // Attribute / cheaper refinements hit search_catalog so the server can filter
+  // lastShownProducts (or merge lastSearchQuery) — don't leave that to chance.
+  const merchJourney =
+    journey && journeyForcesCatalogSearch(journey.kind) ? journey : null;
+  const forceCatalogSearch =
+    Boolean(merchJourney) ||
+    refinementNeedsTool ||
+    round0ForceCatalogSearch(
+      lastUser,
+      productIntent || Boolean(merchJourney),
+      contextOnlyFollowUp,
+    );
+
   setSessionIntent(session, resolveTurnIntent(lastUser, session));
 
   // Inject remembered products so the advisor can resolve "these/that/which one"
   // and do variant lookups by id before searching again.
-  const contextBlock = buildContextBlock(session.lastShownProducts);
+  const contextBlock = buildContextBlock(session.lastShownProducts, {
+    lastSearchQuery: session.lastSearchQuery,
+    pendingCategory: session.pendingCategory,
+  });
+  const journeyHint = merchJourney?.searchQuery
+    ? (`JOURNEY HINT (trusted): Customer journey=${merchJourney.kind}. ` +
+        `Call search_catalog with query="${merchJourney.searchQuery}"` +
+        (merchJourney.budgetMax != null
+          ? ` and respect budget under ${merchJourney.budgetMax}`
+          : "") +
+        (merchJourney.kind === "on_sale"
+          ? "; prefer products that are on sale"
+          : "") +
+        (merchJourney.kind === "accessories" || merchJourney.kind === "fbt"
+          ? ". Use the Accessories template; search related add-ons (wraps, mouthguard, etc.)"
+          : "") +
+        (merchJourney.kind === "alternatives"
+          ? ". Find similar alternatives to what they named or last showed"
+          : "") +
+        ". Then reply with the matching response template.")
+    : null;
+  let marketHint: string | null = null;
+  try {
+    const { marketCountry } = getShopifyConfig();
+    if (marketCountry) {
+      marketHint = `STORE MARKET (trusted): Catalog prices and availability are for market country ${marketCountry}. Quote tool currencies as returned. Do not convert prices or invent stock for other regions. Request region hint: ${region ?? "default"}.`;
+    }
+  } catch {
+    // Config may be incomplete in some environments — skip market hint.
+  }
   const conversation: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...(contextBlock ? [{ role: "system", content: contextBlock } as const] : []),
+    ...(journeyHint
+      ? [{ role: "system", content: journeyHint } as const]
+      : []),
+    ...(marketHint ? [{ role: "system", content: marketHint } as const] : []),
     ...history,
   ];
 
   let sawEmptyCatalog = false;
+  let sawCatalogInfraFailure = false;
   let needsLargeListBudget = false;
   let capturedProducts: ShownProduct[] | null = null;
   let capturedSizeChart: ChatAttachment | null = null;
+  let capturedSearchQuery: string | null = null;
+  let catalogToolUsed = false;
 
   /** Persist the reply and any freshly shown products for the next turn. */
   const finish = (
@@ -348,6 +515,10 @@ export async function runChatAgent(
     if (capturedProducts && capturedProducts.length > 0) {
       setLastShownProducts(session, capturedProducts);
     }
+    if (capturedSearchQuery) {
+      setLastSearchQuery(session, capturedSearchQuery);
+      setPendingCategory(session, capturedSearchQuery);
+    }
     return finishWithReply(
       session,
       reply,
@@ -357,28 +528,139 @@ export async function runChatAgent(
     );
   };
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    if (signal.aborted) {
-      return finish(FALLBACK_REPLY);
+  const applyCatalogToolResult = (result: string): void => {
+    catalogToolUsed = true;
+    if (isCatalogInfraFailure(result)) {
+      sawCatalogInfraFailure = true;
+      return;
+    }
+    if (isEmptyCatalogResult(result)) {
+      sawEmptyCatalog = true;
+      return;
+    }
+    sawEmptyCatalog = false;
+    if (result.length > LARGE_PAYLOAD_CHARS) {
+      needsLargeListBudget = true;
+    }
+    const shown = extractShownProducts(result);
+    if (shown.length > 0) capturedProducts = shown;
+  };
+
+  const toolRunOpts = {
+    region,
+    signal,
+    lastUser,
+    lastSearchQuery: session.lastSearchQuery,
+    lastShownProducts: session.lastShownProducts,
+    onSearchQuery: (query: string) => {
+      capturedSearchQuery = query;
+    },
+    onSizeChartAttachment: (attachment: ChatAttachment) => {
+      capturedSizeChart = attachment;
+    },
+  };
+
+  // Prefetch search_catalog when we already know it is required — skips a
+  // wasted LLM round that only emits the forced tool call.
+  if (forceCatalogSearch && !signal.aborted) {
+    const prefetchArgs: Record<string, unknown> = {
+      query: merchJourney?.searchQuery?.trim() || lastUser.trim(),
+    };
+    if (merchJourney?.budgetMax != null) {
+      prefetchArgs.budgetMax = merchJourney.budgetMax;
+    }
+    if (merchJourney?.kind === "on_sale") {
+      prefetchArgs.onSaleOnly = true;
     }
 
-    const completion = await client.chat.completions.create(
-      {
-        model,
-        messages: conversation,
-        tools: tools,
-        // The advisor decides whether to retrieve — never force a search.
-        tool_choice: "auto",
-        // gpt-5.6-terra rejects function tools unless reasoning is disabled
-        // on /v1/chat/completions (or callers migrate to /v1/responses).
-        reasoning_effort: "none",
-        temperature: 0.3,
-        max_completion_tokens: needsLargeListBudget
-          ? LARGE_LIST_COMPLETION_TOKENS
-          : MAX_COMPLETION_TOKENS,
-      },
-      { signal },
-    );
+    const toolCallId = `prefetch_search_${Date.now()}`;
+    const result = await runTool("search_catalog", prefetchArgs, toolRunOpts);
+    applyCatalogToolResult(result);
+
+    conversation.push({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: toolCallId,
+          type: "function",
+          function: {
+            name: "search_catalog",
+            arguments: JSON.stringify(prefetchArgs),
+          },
+        },
+      ],
+    });
+    conversation.push({
+      role: "tool",
+      tool_call_id: toolCallId,
+      content: result,
+    });
+
+    logger.info("chat-agent", "prefetched search_catalog", {
+      requestId,
+      infraFailure: sawCatalogInfraFailure,
+      empty: sawEmptyCatalog,
+    });
+
+    // Honest short-circuit: don't ask the model to invent products after infra failure.
+    if (sawCatalogInfraFailure) {
+      return finish(SERVICE_UNAVAILABLE_REPLY);
+    }
+  }
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    if (signal.aborted) {
+      return finish(
+        sawCatalogInfraFailure
+          ? SERVICE_UNAVAILABLE_REPLY
+          : productIntent && sawEmptyCatalog
+            ? NOT_AVAILABLE_REPLY
+            : FALLBACK_REPLY,
+      );
+    }
+
+    // Only force search_catalog when prefetch did not already run.
+    const toolChoice =
+      forceCatalogSearch && round === 0 && !catalogToolUsed
+        ? ({
+            type: "function" as const,
+            function: { name: "search_catalog" },
+          } as const)
+        : ("auto" as const);
+
+    let completion;
+    try {
+      completion = await client.chat.completions.create(
+        {
+          model,
+          messages: conversation,
+          tools: tools,
+          tool_choice: toolChoice,
+          // gpt-5.6-terra rejects function tools unless reasoning is disabled
+          // on /v1/chat/completions (or callers migrate to /v1/responses).
+          reasoning_effort: "none",
+          temperature: 0.3,
+          max_completion_tokens: needsLargeListBudget
+            ? LARGE_LIST_COMPLETION_TOKENS
+            : MAX_COMPLETION_TOKENS,
+        },
+        { signal },
+      );
+    } catch (err) {
+      if (signal.aborted) {
+        return finish(FALLBACK_REPLY);
+      }
+      logger.error("chat-agent", "openai completion failed", {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return finish(
+        sawCatalogInfraFailure || productIntent
+          ? SERVICE_UNAVAILABLE_REPLY
+          : FALLBACK_REPLY,
+      );
+    }
 
     if (completion.usage) {
       addTokenUsage(session, completion.usage);
@@ -407,7 +689,10 @@ export async function runChatAgent(
       (tc) => tc.type === "function",
     );
     if (!toolCalls || toolCalls.length === 0) {
-      let reply = stripAssistantMedia(message.content ?? "") || FALLBACK_REPLY;
+      if (sawCatalogInfraFailure) {
+        return finish(SERVICE_UNAVAILABLE_REPLY);
+      }
+      let reply = polishCustomerReply(message.content ?? "") || FALLBACK_REPLY;
       if (choice.finish_reason === "length") {
         reply = reply
           ? `${reply.trim()}\n\n_(List was cut short — ask me to continue or show the next set.)_`
@@ -423,7 +708,11 @@ export async function runChatAgent(
       ) {
         return finish(NOT_AVAILABLE_REPLY);
       }
-      return finish(reply);
+      // Empty model content after a successful empty catalog → honest no-results.
+      if (productIntent && sawEmptyCatalog && !reply.trim()) {
+        return finish(NOT_AVAILABLE_REPLY);
+      }
+      return finish(reply || FALLBACK_REPLY);
     }
 
     conversation.push(message);
@@ -437,14 +726,7 @@ export async function runChatAgent(
         // empty args
       }
 
-      const result = await runTool(toolCall.function.name, args, {
-        region,
-        signal,
-        lastUser,
-        onSizeChartAttachment: (attachment) => {
-          capturedSizeChart = attachment;
-        },
-      });
+      const result = await runTool(toolCall.function.name, args, toolRunOpts);
 
       if (toolCall.function.name === "track_order") {
         try {
@@ -456,7 +738,17 @@ export async function runChatAgent(
             return finish(parsed.message, "idle");
           }
           if (parsed.error) {
-            return finish(parsed.error, "idle");
+            // Prefer known customer-safe copy; never leak opaque infra strings.
+            const err = parsed.error.trim();
+            const safe =
+              err.length > 0 &&
+              err.length < 280 &&
+              !/exception|stack|ECONN|ETIMEDOUT|fetch failed|500|401|403/i.test(
+                err,
+              )
+                ? err
+                : ORDER_LOOKUP_FAILED_REPLY;
+            return finish(safe, "idle");
           }
         } catch {
           // fall through
@@ -464,18 +756,7 @@ export async function runChatAgent(
       }
 
       if (CATALOG_TOOLS.has(toolCall.function.name)) {
-        const dataSection = extractCatalogData(result);
-        if (!dataSection || dataSection === "{}") {
-          sawEmptyCatalog = true;
-        } else {
-          sawEmptyCatalog = false;
-          if (dataSection.length > LARGE_PAYLOAD_CHARS) {
-            needsLargeListBudget = true;
-          }
-          // Remember the latest non-empty set for follow-up/pronoun resolution.
-          const shown = extractShownProducts(result);
-          if (shown.length > 0) capturedProducts = shown;
-        }
+        applyCatalogToolResult(result);
       }
 
       conversation.push({
@@ -486,6 +767,9 @@ export async function runChatAgent(
     }
   }
 
+  if (sawCatalogInfraFailure) {
+    return finish(SERVICE_UNAVAILABLE_REPLY);
+  }
   return finish(
     productIntent && sawEmptyCatalog ? NOT_AVAILABLE_REPLY : FALLBACK_REPLY,
   );

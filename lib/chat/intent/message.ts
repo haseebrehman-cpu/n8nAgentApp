@@ -8,12 +8,13 @@
 import { isValidEmailInput } from "@/lib/chatbot/orderTracking";
 import type { ChatMessagePayload } from "@/lib/types";
 import {
+  BROAD_TOPIC_PHRASES,
   CATEGORY_BROWSE_PHRASES,
   PRODUCT_MODEL_CODE_RE,
   QUERY_TYPO_MAP,
 } from "@/lib/chat/intent/patterns";
 import { isDiscountCodeQuery, isDiscountQuery } from "@/lib/chat/intent/discount";
-// import { isHarmfulQuery } from "@/lib/chat/intent/safety";
+import { isHarmfulQuery } from "@/lib/chat/intent/safety";
 import {
   isBareOrderNumberToken,
   isOrderTrackingIntent,
@@ -256,8 +257,8 @@ export function hasExplicitCatalogListOrCountIntent(key: string): boolean {
 }
 
 /**
- * Broad "I need gloves / protection / equipment" style asks that should get a
- * clarifying follow-up instead of an immediate catalog dump.
+ * Broad sport/department or "I need gloves" asks that should get ONE clarifying
+ * question instead of an immediate catalog dump (e.g. bare "boxing").
  */
 export function needsProductClarification(text: string): boolean {
   const key = normalizeBrowseKey(text);
@@ -270,12 +271,19 @@ export function needsProductClarification(text: string): boolean {
     /\b(training|sparring|competition|boxing|mma|bag|kids?|fitness|workout|lifting)\b/i.test(
       key,
     ) &&
-    /\b(gloves?|bags?|guards?|headgears?|shorts?|shoes|boots|pads?|wraps?)\b/i.test(
+    /\b(gloves?|bags?|guards?|headgears?|shorts?|shoes|boots|pads?|wraps?|mats?)\b/i.test(
       key,
     )
   ) {
     return false;
   }
+
+  // Named model / SKU — never clarify, search.
+  if (hasNamedProductModel(key)) return false;
+
+  // Bare sport / department: "boxing", "mma", "fitness", "yoga", "kids"…
+  if (BROAD_TOPIC_PHRASES.has(key)) return true;
+  if (/^show\s+boxing$/i.test(key)) return true;
 
   // "I need gloves", "looking for protection", bare "gloves" / "equipment"
   if (
@@ -297,6 +305,8 @@ export function isAmbiguousBrowseQuery(text: string): boolean {
   const key = normalizeBrowseKey(text);
   if (!key) return false;
   if (hasExplicitCatalogListOrCountIntent(key)) return false;
+  // Ultra-broad sports/departments need clarification, not an immediate search.
+  if (needsProductClarification(key)) return false;
   // Specific enough already (use-case + product type)
   if (
     /\b(training|sparring|competition|bag|kids?|fitness|workout|lifting)\s+/i.test(
@@ -354,17 +364,35 @@ export function isProductFollowUpQuery(text: string): boolean {
 
   // 3. Superlative & attribute query terms (price, discount, size, weight, stock, ratings)
   if (
-    /\b(cheapest|cheaper|lowest\s+price|highest\s+price|most\s+expensive|best\s+value|lowest|highest|most\s+discount|biggest\s+discount|best\s+discount|on\s+sale|discounted|discounts?|marked\s+down|reduced|savings|lightest|heaviest)\b/i.test(
+    /\b(cheapest|cheaper|lowest\s+price|highest\s+price|most\s+expensive|best\s+value|lowest|highest|most\s+discount|biggest\s+discount|best\s+discount|on\s+sale|discounted|discounts?|marked\s+down|reduced|savings|lightest|heaviest|show\s+cheaper|more\s+affordable|less\s+expensive)\b/i.test(
       t,
     )
   ) {
     return true;
   }
 
-  // 4. Pronoun / attribute follow-ups tied to prior product context
+  // 4. Short colour / weight / material refinements ("only blue", "16 oz", "leather")
+  if (
+    /^(only\s+|just\s+|in\s+)?(red|blue|black|white|green|pink|yellow|orange|purple|grey|gray|navy|leather|synthetic|vegan|\d{1,2}\s*oz)(\s+ones?)?\.?$/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  // 5. Pronoun / attribute follow-ups tied to prior product context
   if (
     /\b(them|these|those|it|that|this|ones?)\b/i.test(t) &&
     /\b(oz|ounce|size|weight|material|use|purpose|colour|color|stock|price|cheaper|cheapest|expensive|heavier|lighter|options?|available|lowest|highest|discount|discounted|discounts|sale|savings|kids?|adults?|sparring|training|competition|leather|synthetic|vegan|clean|care|warranty|rating|review|certified|beginner|professional|pro)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  // 6. Returning to earlier products ("back to the f4", "the gloves from earlier")
+  if (
+    /\b(back\s+to|earlier|before|again|the\s+other\s+one|from\s+before|we\s+looked\s+at)\b/i.test(
       t,
     )
   ) {
@@ -385,9 +413,12 @@ export function hasRecentProductContext(
     const c = m.content;
     return (
       /\*\*Price:\*\*/i.test(c) ||
+      /\*\*Stock:\*\*/i.test(c) ||
       /\*\*Key features\*\*/i.test(c) ||
+      /\[View product\]/i.test(c) ||
       /View product:/i.test(c) ||
       /Found \*\*\d+\*\* products/i.test(c) ||
+      /###\s+\*\*/i.test(c) ||
       /\b(RDX|gloves|guard|kit|bundle|boxing|mma|shin|robe)\b/i.test(c)
     );
   });
@@ -452,7 +483,7 @@ export function shouldForceProductSearch(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
-  // if (isHarmfulQuery(t)) return false;
+  if (isHarmfulQuery(t)) return false;
 
   // Broad "I need gloves/protection/equipment" → clarify first, don't force search.
   if (needsProductClarification(t)) return false;

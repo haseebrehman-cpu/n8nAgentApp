@@ -2,9 +2,9 @@
  * Low-level client for Shopify's hosted Storefront MCP servers.
  *
  * Speaks JSON-RPC 2.0 (`tools/call`) over HTTP against the store's public
- * MCP endpoints. These endpoints require no authentication — only the store
- * domain and a `Content-Type` header. Includes a request timeout, retries on
- * throttling/network errors, and `AbortSignal` support.
+ * MCP endpoints. Includes per-attempt timeout, retries on throttle / network /
+ * timeout / corrupt JSON, and AbortSignal support. Client disconnects are
+ * never retried.
  */
 
 import { logger } from "@/lib/logger";
@@ -48,6 +48,10 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Combine a per-attempt timeout with an optional external cancel signal.
+ * When AbortSignal.any is unavailable, abort whichever fires first.
+ */
 function combineSignals(timeoutMs: number, external?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
   if (!external) return timeout;
@@ -59,13 +63,48 @@ function combineSignals(timeoutMs: number, external?: AbortSignal): AbortSignal 
   if (typeof anyFn === "function") {
     return anyFn([timeout, external]);
   }
-  return external.aborted ? external : timeout;
+  // Polyfill: abort when either signal aborts.
+  if (external.aborted) return external;
+  const controller = new AbortController();
+  const onAbort = () => {
+    try {
+      controller.abort(
+        external.aborted
+          ? (external.reason ?? new DOMException("Aborted", "AbortError"))
+          : new DOMException("Timeout", "TimeoutError"),
+      );
+    } catch {
+      controller.abort();
+    }
+  };
+  external.addEventListener("abort", onAbort, { once: true });
+  timeout.addEventListener("abort", onAbort, { once: true });
+  return controller.signal;
 }
 
 function isAbort(err: unknown): boolean {
   return (
     err instanceof Error &&
-    (err.name === "AbortError" || /aborted/i.test(err.message))
+    (err.name === "AbortError" ||
+      err.name === "TimeoutError" ||
+      /aborted|timeout/i.test(err.message))
+  );
+}
+
+/** True when the caller cancelled (do not retry). */
+function isExternalAbort(err: unknown, external?: AbortSignal): boolean {
+  if (external?.aborted) return true;
+  if (!(err instanceof Error)) return false;
+  // TimeoutError / "Timeout" from our timer should be retryable.
+  if (err.name === "TimeoutError" || /^timeout$/i.test(err.message)) {
+    return false;
+  }
+  return err.name === "AbortError" || /aborted/i.test(err.message);
+}
+
+function isRetryableError(err: Error): boolean {
+  return /429|5\d\d|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|network|timeout|TimeoutError|Unexpected token|JSON/i.test(
+    `${err.name} ${err.message}`,
   );
 }
 
@@ -88,7 +127,7 @@ export async function callMcpTool(
   endpoint: string,
   name: string,
   args: Record<string, unknown>,
-  options: McpCallOptions = {}
+  options: McpCallOptions = {},
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const body = JSON.stringify({
@@ -99,6 +138,7 @@ export async function callMcpTool(
   });
 
   let lastError: Error | null = null;
+  const started = Date.now();
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (options.signal?.aborted) {
@@ -125,8 +165,14 @@ export async function callMcpTool(
           ? retryAfter * 1000
           : Math.min(1000 * 2 ** attempt + Math.random() * 250, 8_000);
         lastError = new Error(
-          `Shopify MCP ${res.status} for "${name}" (attempt ${attempt + 1}/${MAX_RETRIES})`
+          `Shopify MCP ${res.status} for "${name}" (attempt ${attempt + 1}/${MAX_RETRIES})`,
         );
+        logger.warn("shopify-mcp", "retryable HTTP status", {
+          tool: name,
+          status: res.status,
+          attempt: attempt + 1,
+          backoffMs,
+        });
         if (attempt < MAX_RETRIES - 1) {
           await sleep(backoffMs, options.signal);
           continue;
@@ -134,19 +180,40 @@ export async function callMcpTool(
         throw lastError;
       }
 
-      const json = (await res.json()) as JsonRpcResponse;
+      let json: JsonRpcResponse;
+      try {
+        json = (await res.json()) as JsonRpcResponse;
+      } catch (parseErr) {
+        lastError =
+          parseErr instanceof Error
+            ? parseErr
+            : new Error("Shopify MCP returned invalid JSON");
+        logger.warn("shopify-mcp", "corrupt JSON body", {
+          tool: name,
+          attempt: attempt + 1,
+          error: lastError.message,
+        });
+        if (attempt < MAX_RETRIES - 1) {
+          await sleep(
+            Math.min(1000 * 2 ** attempt + Math.random() * 250, 8_000),
+            options.signal,
+          );
+          continue;
+        }
+        throw lastError;
+      }
 
       if (!res.ok) {
         throw new Error(
           `Shopify MCP HTTP ${res.status} for "${name}": ${
             json.error?.message ?? res.statusText
-          }`
+          }`,
         );
       }
 
       if (json.error) {
         throw new Error(
-          `Shopify MCP error for "${name}": ${json.error.message ?? "unknown error"}`
+          `Shopify MCP error for "${name}": ${json.error.message ?? "unknown error"}`,
         );
       }
 
@@ -154,7 +221,7 @@ export async function callMcpTool(
 
       if (json.result?.isError) {
         throw new Error(
-          `Shopify MCP tool "${name}" returned an error: ${text || "unknown error"}`
+          `Shopify MCP tool "${name}" returned an error: ${text || "unknown error"}`,
         );
       }
 
@@ -171,24 +238,42 @@ export async function callMcpTool(
         endpoint: host,
         bytes: text.length,
         attempt: attempt + 1,
+        ms: Date.now() - started,
       });
 
       return text;
     } catch (err) {
-      if (isAbort(err)) throw err;
+      // Client disconnect / parent abort — never retry.
+      if (isExternalAbort(err, options.signal)) {
+        throw err instanceof Error
+          ? err
+          : new DOMException("Aborted", "AbortError");
+      }
+
       lastError = err instanceof Error ? err : new Error(String(err));
-      if (
+      const retryable =
         attempt < MAX_RETRIES - 1 &&
-        /429|5\d\d|ECONNRESET|ETIMEDOUT|fetch failed|network/i.test(
-          lastError.message
-        )
-      ) {
+        (isRetryableError(lastError) || isAbort(err));
+
+      if (retryable) {
+        logger.warn("shopify-mcp", "retrying after error", {
+          tool: name,
+          attempt: attempt + 1,
+          error: lastError.message,
+          name: lastError.name,
+        });
         await sleep(
           Math.min(1000 * 2 ** attempt + Math.random() * 250, 8_000),
-          options.signal
+          options.signal,
         );
         continue;
       }
+      logger.error("shopify-mcp", "tools/call failed", {
+        tool: name,
+        attempt: attempt + 1,
+        ms: Date.now() - started,
+        error: lastError.message,
+      });
       throw lastError;
     }
   }

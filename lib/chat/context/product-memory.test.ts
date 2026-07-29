@@ -146,11 +146,26 @@ describe("buildContextBlock", () => {
     expect(block).toContain(
       "3. RDX T15 — £29.99 (was £39.99) — In stock — On sale (id: gid://3)",
     );
-    expect(block).toContain("GENERAL CONTEXT RESOLUTION (CRITICAL)");
+    expect(block).toContain("FOLLOW-UP RULES (CRITICAL)");
     expect(block).toContain("get_inventory");
   });
 
   it("caps remembered products at 20 for list-mode follow-ups", () => {
     expect(MAX_SHOWN_PRODUCTS).toBe(20);
+  });
+
+  it("includes last catalog search query when provided", () => {
+    const block = buildContextBlock(products, "sparring gloves")!;
+    expect(block).toContain('Last catalog search query: "sparring gloves"');
+    expect(block).toContain("FOLLOW-UP RULES");
+  });
+
+  it("includes active topic when provided via options", () => {
+    const block = buildContextBlock(products, {
+      lastSearchQuery: "f4 gloves",
+      pendingCategory: "boxing gloves",
+    })!;
+    expect(block).toContain('Active topic / category: "boxing gloves"');
+    expect(block).toContain("show cheaper ones");
   });
 });

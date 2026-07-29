@@ -6,8 +6,9 @@
 
 export {
   ORDER_TRACKING_INTENT_RE,
-  // HARMFUL_QUERY_RE,
+  HARMFUL_QUERY_RE,
   QUERY_TYPO_MAP,
+  BROAD_TOPIC_PHRASES,
   CATEGORY_BROWSE_PHRASES,
   PRODUCT_MODEL_CODE_RE,
 } from "@/lib/chat/intent/patterns";
@@ -23,7 +24,10 @@ export {
 
 export { isDiscountCodeQuery, isDiscountQuery } from "@/lib/chat/intent/discount";
 
-// export { isHarmfulQuery } from "@/lib/chat/intent/safety";
+export {
+  isHarmfulQuery,
+  isPromptInjectionAttempt,
+} from "@/lib/chat/intent/safety";
 
 export { isHumanEscalationRequest } from "@/lib/chat/intent/escalation";
 
@@ -46,3 +50,17 @@ export {
   shouldForceProductSearch,
 } from "@/lib/chat/intent/message";
 export type { CatalogResponseMode } from "@/lib/chat/intent/message";
+
+export {
+  resolveCustomerJourney,
+  journeyForcesCatalogSearch,
+  extractBudgetMax,
+  isGreeting,
+  isThanks,
+  isGoodbye,
+  isOrderCancelRequest,
+  isOrderModifyRequest,
+  isAddressChangeRequest,
+  isContactSupportRequest,
+} from "@/lib/chat/intent/journeys";
+export type { JourneyKind, JourneyMatch } from "@/lib/chat/intent/journeys";

@@ -14,3 +14,8 @@ export {
 } from "@/lib/chat/session";
 export { SYSTEM_PROMPT } from "@/lib/system-prompt";
 export { stripAssistantMedia, sanitizeReply } from "@/lib/sanitize";
+export {
+  polishCustomerReply,
+  RESPONSE_FORMAT_RULES,
+  formatProductCard,
+} from "@/lib/chat/messaging";

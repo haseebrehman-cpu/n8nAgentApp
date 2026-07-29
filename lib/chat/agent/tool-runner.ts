@@ -4,27 +4,17 @@
  * error mapping; it does not decide when tools are called (the orchestrator
  * does) — its single responsibility is running one tool safely.
  *
- * Product catalog discovery uses Shopify Storefront MCP. Category totals that
- * match the live menu (e.g. Boxing → Head Guards = 17) come from the public
- * storefront collection endpoint — not Admin GraphQL — after resolving the
- * query against the store's real collection directory, so productCount is the
- * same number the category page shows.
- * Exact unit quantities use Admin GraphQL via get_inventory.
+ * Product catalog discovery is delegated to `executeSemanticSearch` (Clean
+ * Architecture application layer). Exact unit quantities use Admin GraphQL
+ * via get_inventory.
  */
 
 import { isConfigError } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { compactCatalogMcpText } from "@/lib/shopify/compact-catalog";
 import {
-  fetchStorefrontCollectionsMerged,
-  isCategoryStyleQuery,
-  resolveCategoryCollections,
-} from "@/lib/shopify/storefront-collection";
-import { enrichSearchCatalogWithStorefront } from "@/lib/shopify/storefront-product-search";
-import {
   getProduct,
   lookupCatalog,
-  searchCatalog,
   searchShopPoliciesAndFaqs,
 } from "@/lib/shopify/storefront-mcp";
 import { OrderTrackingError, trackOrder } from "@/lib/chatbot/orderTracking";
@@ -35,26 +25,32 @@ import {
   fetchInventoryByIds,
   fetchProductInventory,
 } from "@/services/shopify/productInventory";
-import {
-  isCatalogCountQuery,
-  normalizeSearchQuery,
-  resolveCatalogResponseMode,
-  extractModelCodeFromQuery,
-  type CatalogResponseMode,
-} from "@/lib/chat/intent";
+import type { CatalogResponseMode } from "@/lib/chat/intent";
 import {
   CATEGORY_PAYLOAD_PRODUCTS,
-  COUNT_SEARCH_LIMIT,
   LIST_PAYLOAD_PRODUCTS,
-  SEARCH_RESULT_LIMIT,
 } from "@/lib/chat/agent/config";
 import { wrapMcpResult } from "@/lib/chat/agent/mcp-format";
-import { searchCatalogForCount } from "@/lib/chat/agent/catalog-count";
+import { executeSemanticSearch } from "@/lib/chat/search";
+import type { ShownProduct } from "@/lib/chat/context/product-memory";
+import {
+  parseCatalogGid,
+  toShopifyProductGid,
+} from "@/lib/shopify/gid";
 
 export interface RunToolOptions {
   region?: ShopifyStoreRegion;
   signal?: AbortSignal;
   lastUser?: string;
+  /** Prior catalog search query from session — enables follow-up merge. */
+  lastSearchQuery?: string | null;
+  /** Products most recently shown — enables context-filter reuse. */
+  lastShownProducts?: ShownProduct[] | null;
+  /**
+   * Called after a successful search_catalog so the session can remember the
+   * effective query for the next turn's refinements.
+   */
+  onSearchQuery?: (query: string) => void;
   /**
    * Called when get_size_chart resolves a verified chart. The model never sees
    * the raw image URL — only this callback receives it for the HTTP response.
@@ -62,35 +58,37 @@ export interface RunToolOptions {
   onSizeChartAttachment?: (attachment: ChatAttachment) => void;
 }
 
-function payloadCapForMode(mode: CatalogResponseMode): number | undefined {
-  if (mode === "list") return LIST_PAYLOAD_PRODUCTS;
-  if (mode === "category") return CATEGORY_PAYLOAD_PRODUCTS;
-  return undefined;
-}
-
 function hintForMode(
   mode: CatalogResponseMode,
   collectionLabel?: string,
+  confidence?: string,
 ): string {
+  const confidenceNote =
+    confidence === "low" || confidence === "empty"
+      ? " Search confidence is low — if results look weak, ask a clarifying question rather than inventing products."
+      : confidence === "partial"
+        ? " Results are a partial match — prefer the highest relevanceScore items and offer to narrow further."
+        : "";
+
   if (mode === "list") {
     const scope = collectionLabel
       ? ` from the live storefront collection ${collectionLabel}`
       : "";
-    return `LIST MODE${scope}: productCount is the category total (exact when countIsExactCategoryTotal is true; otherwise say "at least productCount"). Show at most ${LIST_PAYLOAD_PRODUCTS} products from the products array (name, price, stock status, URL only). If productsTruncated is true or productCount > productsShown, clearly say you are showing the first ${LIST_PAYLOAD_PRODUCTS} only. Never return more than ${LIST_PAYLOAD_PRODUCTS}. Never invent products or stock.`;
+    return `LIST MODE${scope}: Use the Full list response template (headings, bullets, Product Cards — no tables, no JSON, no field names). productCount is the category total (exact when countIsExactCategoryTotal is true; otherwise say "at least" that many). Show at most ${LIST_PAYLOAD_PRODUCTS} products. If truncated, say you are showing the first ${LIST_PAYLOAD_PRODUCTS} only. Never invent products or stock.${confidenceNote}`;
   }
 
   if (mode === "category") {
     const scope = collectionLabel
       ? ` from the live storefront collection ${collectionLabel}`
       : "";
-    return `CATEGORY MODE${scope}: productCount is the category total (exact when countIsExactCategoryTotal is true; otherwise say "at least productCount"). Reply with the total and up to ${CATEGORY_PAYLOAD_PRODUCTS} products from the products array — each with name, price, stock status, and URL only. Then invite the customer to narrow by model, size, weight, material, or use. Never invent products or stock.`;
+    return `CATEGORY MODE${scope}: Use the Category listing response template (headings, bullets, Product Cards — no tables, no JSON, no field names). State the total from productCount (exact when countIsExactCategoryTotal is true). Show up to ${CATEGORY_PAYLOAD_PRODUCTS} products, then invite narrowing by model, size, weight, material, or use. Never invent products or stock.${confidenceNote}`;
   }
 
   if (mode === "specific") {
-    return `SPECIFIC PRODUCT MODE: Prefer the best title match. If the customer asked about one product, call get_product with its id and reply with details for that product only — do not shortlist unrelated alternatives. Never invent products or stock.`;
+    return `SPECIFIC PRODUCT MODE: Prefer the best title match. If the customer asked about one product, call get_product with its id and use the Product details template — that product only. No tables, no JSON, no internal field names. Never invent products or stock.${confidenceNote}`;
   }
 
-  return `Live search results (compacted + title-filtered). Recommend the best 3 (max 5) that fit what the customer asked for, each with a short reason, then offer a natural next step. DON'T dump the whole list. productCount is only an exact total when countIsExactCategoryTotal is true. Never invent products or stock.`;
+  return `Live semantic search results (compacted, deduped, relevance-ranked). Use the Product search or Recommendations response template: headings, short paragraphs (max 2 sentences), hyphen bullets, Product Cards. Prefer higher relevanceScore but NEVER expose field names (relevanceScore, productCount, etc.) to the customer. Recommend the best 3 (max 5), then one next step. No markdown tables, no JSON. Never invent products or stock.${confidenceNote}`;
 }
 
 export async function runTool(
@@ -100,32 +98,6 @@ export async function runTool(
 ): Promise<string> {
   try {
     if (name === "search_catalog") {
-      const query = normalizeSearchQuery(String(args.query ?? ""));
-      if (!query) return JSON.stringify({ error: "query is required" });
-
-      const mode = resolveCatalogResponseMode(options.lastUser ?? "", query);
-      const needsExactTotal = mode === "category" || mode === "list";
-      const payloadCap = payloadCapForMode(mode);
-
-      const counting =
-        needsExactTotal ||
-        args.forCount === true ||
-        args.forCount === "true" ||
-        isCatalogCountQuery(options.lastUser ?? "") ||
-        isCatalogCountQuery(query);
-
-      const limitRaw = Number(args.limit);
-      const limit =
-        Number.isFinite(limitRaw) && limitRaw > 0
-          ? Math.min(Math.floor(limitRaw), 50)
-          : counting
-            ? COUNT_SEARCH_LIMIT
-            : mode === "specific"
-              ? 3
-              : SEARCH_RESULT_LIMIT;
-
-      // Include out-of-stock by default so counts and lists match full inventory.
-      // Only filter to in-stock when the customer asks, or the model sets availableOnly.
       const wantInStockOnly = /\b(in\s+stock|available\s+only)\b/i.test(
         options.lastUser ?? "",
       );
@@ -134,152 +106,58 @@ export async function runTool(
         args.availableOnly === true ||
         args.availableOnly === "true";
 
-      const preferCollection =
-        needsExactTotal || counting || isCategoryStyleQuery(query);
+      const result = await executeSemanticSearch({
+        query: String(args.query ?? ""),
+        lastUser: options.lastUser ?? "",
+        lastSearchQuery: options.lastSearchQuery,
+        lastShownProducts: options.lastShownProducts,
+        availableOnly,
+        forCount:
+          args.forCount === true || args.forCount === "true",
+        limit: Number(args.limit),
+        signal: options.signal,
+        budgetMax:
+          typeof args.budgetMax === "number" ? args.budgetMax : undefined,
+        onSaleOnly:
+          args.onSaleOnly === true || args.onSaleOnly === "true",
+      });
 
-      if (preferCollection) {
-        const firstPage = await searchCatalog(
-          {
-            query,
-            pagination: { limit: COUNT_SEARCH_LIMIT },
-            filters: { available: availableOnly },
-          },
-          { signal: options.signal },
-        );
-
-        // When the query contains a product model code alongside a category
-        // word (e.g. "f4 gloves", "f4 boxing gloves"), the model code is NOT
-        // part of any Shopify collection title/handle — only the category word
-        // is ("Boxing Gloves").  Use just the category portion for collection
-        // resolution so the right collection is found, then rely on
-        // filterProductsByQueryRelevance (skipRelevanceFilter omitted / false)
-        // to narrow the collection's products to those whose title contains
-        // the model code, giving an accurate count.
-        const modelSplit = extractModelCodeFromQuery(query);
-        const collectionLookupQuery = modelSplit
-          ? modelSplit.categoryQuery
-          : query;
-
-        const picked = await resolveCategoryCollections(
-          collectionLookupQuery,
-          firstPage,
-          { signal: options.signal },
-        );
-        if (picked.length > 0) {
-          try {
-            const collectionRaw = await fetchStorefrontCollectionsMerged(
-              picked.map((c) => ({ handle: c.handle, title: c.title })),
-              {
-                signal: options.signal,
-                availableOnly,
-              },
-            );
-            const label =
-              picked.length === 1
-                ? `"${picked[0]!.title}" (${picked[0]!.handle})`
-                : `${picked.length} subcategory collections under "${picked[0]!.title}" (total across all matching subcategories)`;
-            // When the original query had a model code (e.g. "f4 gloves"),
-            // pass that full query so filterProductsByQueryRelevance filters
-            // the collection's products down to the matching model.
-            // For plain category queries (no model code), skip relevance
-            // filtering as before — the collection is already the right scope.
-            const compactOptions = modelSplit
-              ? {
-                  query,                   // "f4 gloves" — filters to F4 products
-                  exhaustedSearch: true,
-                  maxProductsInPayload: payloadCap,
-                  // skipRelevanceFilter intentionally omitted → false
-                }
-              : {
-                  query,
-                  skipRelevanceFilter: true as const,
-                  exhaustedSearch: true,
-                  maxProductsInPayload: payloadCap,
-                };
-            return wrapMcpResult(
-              compactCatalogMcpText(collectionRaw, compactOptions),
-              hintForMode(mode === "generic" ? "category" : mode, label),
-            );
-          } catch (err) {
-            logger.warn(
-              "chat-agent",
-              "storefront collection fetch failed; using MCP search filter",
-              {
-                query,
-                handles: picked.map((c) => c.handle),
-                error: err instanceof Error ? err.message : String(err),
-              },
-            );
-          }
-        }
-
-        // Exact totals without a collection: paginate MCP for category/list/count.
-        if (needsExactTotal || counting) {
-          const { raw, exhausted } = await searchCatalogForCount(
-            query,
-            availableOnly,
-            { signal: options.signal },
-          );
-          const enrichedPaginated = await enrichSearchCatalogWithStorefront(
-            raw,
-            query,
-            { signal: options.signal },
-          );
-          const effectiveMode: CatalogResponseMode =
-            mode === "list" ? "list" : "category";
-          return wrapMcpResult(
-            compactCatalogMcpText(enrichedPaginated, {
-              query,
-              exhaustedSearch: exhausted,
-              maxProductsInPayload: payloadCap ?? CATEGORY_PAYLOAD_PRODUCTS,
-            }),
-            hintForMode(effectiveMode),
-          );
-        }
-
-        const enrichedFirst = await enrichSearchCatalogWithStorefront(
-          firstPage,
-          query,
-          { signal: options.signal },
-        );
-        return wrapMcpResult(
-          compactCatalogMcpText(enrichedFirst, {
-            query,
-            maxProductsInPayload: payloadCap,
-          }),
-          hintForMode(mode),
-        );
+      if (result.effectiveQuery) {
+        options.onSearchQuery?.(result.effectiveQuery);
       }
 
-      const data = await searchCatalog(
-        {
-          query,
-          pagination: { limit },
-          filters: { available: availableOnly },
-        },
-        { signal: options.signal },
-      );
-      const enriched = await enrichSearchCatalogWithStorefront(data, query, {
-        signal: options.signal,
-      });
+      const hintMode =
+        result.mode === "generic" && result.collectionLabel
+          ? "category"
+          : result.mode;
+
       return wrapMcpResult(
-        compactCatalogMcpText(enriched, {
-          query,
-          maxProductsInPayload: payloadCap,
-        }),
-        hintForMode(mode),
+        result.compactJson,
+        hintForMode(
+          hintMode,
+          result.collectionLabel,
+          result.confidence,
+        ),
       );
     }
 
     if (name === "get_product") {
-      const id = String(args.id ?? "").trim();
-      if (!id) return JSON.stringify({ error: "id is required" });
+      const rawId = String(args.id ?? "").trim();
+      if (!rawId) return JSON.stringify({ error: "id is required" });
+      const id = toShopifyProductGid(rawId);
+      if (!id) {
+        return JSON.stringify({
+          error: "invalid_product_id",
+          message:
+            "That product id is invalid. Do NOT invent ids. Call search_catalog first, then use an id from the results.",
+        });
+      }
 
       try {
         const data = await getProduct({ id }, { signal: options.signal });
         return wrapMcpResult(
           compactCatalogMcpText(data),
-          "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. Never invent details.",
+          "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. Never invent details. If inStock is null, do not claim stock — call get_product variants or get_inventory.",
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -296,13 +174,23 @@ export async function runTool(
     }
 
     if (name === "get_inventory") {
-      const singleId = String(args.id ?? "").trim();
-      const ids = Array.isArray(args.ids)
+      const singleRaw = String(args.id ?? "").trim();
+      const rawIds = Array.isArray(args.ids)
         ? args.ids.map((x) => String(x).trim()).filter(Boolean)
         : [];
 
+      const singleParsed = singleRaw ? parseCatalogGid(singleRaw) : null;
+      const singleId = singleParsed?.gid ?? "";
+      const ids = rawIds
+        .map((x) => parseCatalogGid(x)?.gid)
+        .filter((x): x is string => Boolean(x));
+
       if (!singleId && ids.length === 0) {
-        return JSON.stringify({ error: "id or ids is required" });
+        return JSON.stringify({
+          error: "invalid_product_id",
+          message:
+            "id or ids is required and must be a real product/variant id from CONVERSATION CONTEXT or a prior tool result. Call search_catalog first if you do not have one.",
+        });
       }
 
       if (ids.length > 0) {
@@ -329,15 +217,36 @@ export async function runTool(
         });
       }
 
+      const total =
+        result && typeof result.totalInventory === "number"
+          ? result.totalInventory
+          : null;
+      const lowStock =
+        result?.tracksInventory === true &&
+        total != null &&
+        total > 0 &&
+        total <= 5;
+
       return JSON.stringify({
         ...result,
-        hint: "Report exact quantities ONLY from this Admin inventory payload. If tracksInventory is false, do not invent a unit count. If totalInventory is 0, say the product is out of stock. If > 0, state the unit count naturally. Never estimate.",
+        lowStock: lowStock || undefined,
+        hint: lowStock
+          ? `LOW STOCK: Only ${total} units left. Tell the customer clearly (e.g. "only ${total} left") and offer to help them choose a size/colour while stock lasts. Report exact quantities ONLY from this payload. Never estimate.`
+          : "Report exact quantities ONLY from this Admin inventory payload. If tracksInventory is false, do not invent a unit count. If totalInventory is 0, say the product is out of stock. If > 0, state the unit count naturally. When totalInventory is 1–5, mention low stock. Never estimate.",
       });
     }
 
     if (name === "get_size_chart") {
-      const id = String(args.id ?? "").trim();
-      if (!id) return JSON.stringify({ error: "id is required" });
+      const rawId = String(args.id ?? "").trim();
+      if (!rawId) return JSON.stringify({ error: "id is required" });
+      const id = toShopifyProductGid(rawId);
+      if (!id) {
+        return JSON.stringify({
+          error: "invalid_product_id",
+          message:
+            "That product id is invalid. Call search_catalog first, then get_size_chart with a real id.",
+        });
+      }
 
       const chart = await fetchProductSizeChart(id, {
         region: options.region,
@@ -378,9 +287,17 @@ export async function runTool(
 
     if (name === "lookup_catalog") {
       const ids = Array.isArray(args.ids)
-        ? args.ids.map((x) => String(x).trim()).filter(Boolean)
+        ? args.ids
+            .map((x) => parseCatalogGid(String(x).trim())?.gid)
+            .filter((x): x is string => Boolean(x))
         : [];
-      if (ids.length === 0) return JSON.stringify({ error: "ids is required" });
+      if (ids.length === 0) {
+        return JSON.stringify({
+          error: "invalid_product_id",
+          message:
+            "ids is required and must be real product/variant ids from prior results. Call search_catalog first.",
+        });
+      }
 
       const data = await lookupCatalog({ ids }, { signal: options.signal });
       return wrapMcpResult(
@@ -428,21 +345,50 @@ export async function runTool(
     if (err instanceof OrderTrackingError) {
       return JSON.stringify({ error: err.message });
     }
+    const catalogTool =
+      name === "search_catalog" ||
+      name === "get_product" ||
+      name === "lookup_catalog" ||
+      name === "get_inventory" ||
+      name === "get_size_chart";
+
     if (isConfigError(err)) {
       logger.error("chat-agent", `tool "${name}" config error`, {
         error: err.message,
       });
-      return JSON.stringify({
-        error:
-          "The store connection is not ready yet. Apologize and say the service is temporarily unavailable.",
-      });
+      return JSON.stringify(
+        catalogTool
+          ? {
+              error: "search_failed",
+              productCount: 0,
+              products: [],
+              message:
+                "The store connection is not ready yet. Apologize and say the service is temporarily unavailable.",
+            }
+          : {
+              error:
+                "The store connection is not ready yet. Apologize and say the service is temporarily unavailable.",
+            },
+      );
     }
     logger.error("chat-agent", `tool "${name}" failed`, {
       error: err instanceof Error ? err.message : String(err),
     });
-    return JSON.stringify({
-      error:
-        "The lookup failed. Apologize and ask the customer to try again shortly.",
-    });
+    // Structured infra code so the agent can short-circuit to a canned reply
+    // instead of letting the model paraphrase internal failures.
+    return JSON.stringify(
+      catalogTool
+        ? {
+            error: "search_failed",
+            productCount: 0,
+            products: [],
+            message:
+              "The lookup failed. Apologize and ask the customer to try again shortly.",
+          }
+        : {
+            error:
+              "The lookup failed. Apologize and ask the customer to try again shortly.",
+          },
+    );
   }
 }

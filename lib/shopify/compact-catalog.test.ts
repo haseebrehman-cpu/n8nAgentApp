@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   compactCatalogMcpText,
   compactProduct,
+  dedupeProductsById,
   extractProductTerms,
   filterProductsByQueryRelevance,
   formatMoney,
+  rankProductsByRelevance,
 } from "@/lib/shopify/compact-catalog";
 import { normalizeSearchQuery } from "@/lib/chat-agent";
 
@@ -639,5 +641,63 @@ describe("normalizeSearchQuery", () => {
     );
     expect(normalizeSearchQuery("head gear")).toBe("head guards");
     expect(normalizeSearchQuery("Kids Headgear")).toBe("Kids head guards");
+  });
+});
+
+describe("dedupeProductsById / rankProductsByRelevance", () => {
+  it("removes duplicate product ids", () => {
+    const products = [
+      { id: "a", title: "RDX F4 Gloves" },
+      { id: "a", title: "RDX F4 Gloves dup" },
+      { id: "b", title: "RDX Wrap" },
+    ];
+    expect(dedupeProductsById(products)).toHaveLength(2);
+  });
+
+  it("ranks model-code matches above unrelated titles", () => {
+    const ranked = rankProductsByRelevance(
+      [
+        { id: "1", title: "RDX Hand Wraps" },
+        { id: "2", title: "RDX F4 Boxing Sparring Gloves" },
+        { id: "3", title: "RDX Focus Pads" },
+      ],
+      "f4 gloves",
+    );
+    expect(ranked[0]!.product.title).toContain("F4");
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
+  it("dedupes and attaches relevanceScore in compactCatalogMcpText", () => {
+    const raw = JSON.stringify({
+      products: [
+        {
+          id: "gid://shopify/Product/1",
+          title: "RDX F4 Boxing Gloves Black",
+          url: "https://example.com/products/f4",
+          price_range: { min: { amount: 2999, currency: "GBP" } },
+          variants: [{ title: "Default", availability: { available: true } }],
+        },
+        {
+          id: "gid://shopify/Product/1",
+          title: "RDX F4 Boxing Gloves Black",
+          url: "https://example.com/products/f4",
+          price_range: { min: { amount: 2999, currency: "GBP" } },
+          variants: [{ title: "Default", availability: { available: true } }],
+        },
+        {
+          id: "gid://shopify/Product/2",
+          title: "RDX Hand Wraps",
+          url: "https://example.com/products/wraps",
+          price_range: { min: { amount: 999, currency: "GBP" } },
+          variants: [{ title: "Default", availability: { available: true } }],
+        },
+      ],
+    });
+    const parsed = JSON.parse(
+      compactCatalogMcpText(raw, { query: "f4 gloves" }),
+    );
+    expect(parsed.productCount).toBe(1);
+    expect(parsed.products[0].title).toContain("F4");
+    expect(typeof parsed.products[0].relevanceScore).toBe("number");
   });
 });

@@ -4,6 +4,10 @@
  */
 
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import {
+  CATEGORY_PAYLOAD_PRODUCTS,
+  LIST_PAYLOAD_PRODUCTS,
+} from "@/lib/chat/agent/config";
 
 export const tools: ChatCompletionTool[] = [
   {
@@ -11,19 +15,19 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: "search_catalog",
       description:
-        "Search the store's product catalog via Shopify Storefront MCP for items matching the customer's needs — by product name, type, category, feature, colour, size, price, or whether they're on sale. Use for new product discovery, categories, prices, variants, and recommendations. Prefer concise, canonical queries: use the core product/category terms only (e.g. 'boxing gloves', 'f4 gloves', 'head guards'). Do NOT expand the query with extra adjectives based on how the customer worded the question — 'how many f4 gloves' and 'how many gloves in f4' should both produce query='f4 gloves'. Synonyms: 'headgear' / 'boxing headgear' → search 'head guards'. Server caps: category / 'how many' → exact total + up to 5 products; explicit 'show/list all/every' → exact total + up to 20 products. For 'how many X' count questions: ALWAYS set forCount=true and keep the query to the essential product terms (e.g. 'f4 gloves', not 'f4 boxing sparring gloves hook loop'). For exact unit quantities of a known product, use get_inventory instead. Do NOT use this for follow-ups comparing or ranking products already shown in CONVERSATION CONTEXT (e.g. 'which of them has the lowest price', 'which is cheapest') — use context directly. Do NOT use this for policy, shipping, or order-tracking questions.",
+        `Semantic product search (Shopify Storefront MCP). Use for product/category/collection discovery, recommendations, comparisons setup, alternatives, accessories/FBT add-ons, best sellers, new arrivals, trending, gifts, on-sale items, beginner/pro asks, and budget filters. Preserve full intent (use-case, colour, oz, material, budget, model codes). Synonyms: headgear → head guards. Merge short refinements with Last catalog search query. Caps: category/how-many → ${CATEGORY_PAYLOAD_PRODUCTS}; list-all → ${LIST_PAYLOAD_PRODUCTS}. Set forCount=true for "how many". Use get_inventory for exact units. Not for context-only compare/rank, policies, or order tracking.`,
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
             description:
-              'Free-text search query using core product/category terms only, e.g. "boxing gloves", "f4 gloves", "kids punch bag", "products on sale". Do NOT pad with extra adjectives — keep it canonical and concise.',
+              'Semantic query, e.g. "boxing sparring gloves", "best sellers", "new arrivals", "products on sale", "beginner boxing gloves", "gifts", "something similar to t15", "leather boxing gloves under £60". Merge refinements with prior search from context.',
           },
           limit: {
             type: "number",
             description:
-              "Optional max number of products to return (caps at 50). Category/list modes apply server-side caps (5 or 20) regardless of this value.",
+              "Optional max number of products to return (caps at 50). Category/list modes apply server-side payload caps regardless of this value.",
           },
           availableOnly: {
             type: "boolean",

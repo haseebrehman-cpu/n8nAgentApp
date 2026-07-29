@@ -39,7 +39,22 @@ function combineSignals(
   if (typeof AbortSignal.any === "function") {
     return AbortSignal.any([timeout, external]);
   }
-  return external.aborted ? external : timeout;
+  if (external.aborted) return external;
+  const controller = new AbortController();
+  const onAbort = () => {
+    try {
+      controller.abort(
+        external.aborted
+          ? (external.reason ?? new DOMException("Aborted", "AbortError"))
+          : new DOMException("Timeout", "TimeoutError"),
+      );
+    } catch {
+      controller.abort();
+    }
+  };
+  external.addEventListener("abort", onAbort, { once: true });
+  timeout.addEventListener("abort", onAbort, { once: true });
+  return controller.signal;
 }
 
 function isThrottled(

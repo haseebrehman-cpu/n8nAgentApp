@@ -153,20 +153,27 @@ function parseMcpProducts(mcpRawJson: string): {
 /**
  * If MCP search missed a strong storefront title match for a product-specific
  * query, lookup those products by id and prepend them to the MCP payload.
+ *
+ * Pass `force: true` after an empty primary search so suggest.json recovery
+ * still runs for short queries (e.g. "kara", "f4") that fail MCP entirely.
  */
 export async function enrichSearchCatalogWithStorefront(
   mcpRawJson: string,
   query: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; force?: boolean } = {},
 ): Promise<string> {
   const parsed = parseMcpProducts(mcpRawJson);
   if (!parsed) return mcpRawJson;
 
   const q = query.trim();
-  if (!q || !isProductSpecificQuery(q)) return mcpRawJson;
+  if (!q) return mcpRawJson;
+  if (!options.force && !isProductSpecificQuery(q)) return mcpRawJson;
 
   const { obj, products } = parsed;
-  if (products.some((p) => hasStrongTitleMatch(String(p.title ?? ""), q))) {
+  if (
+    products.length > 0 &&
+    products.some((p) => hasStrongTitleMatch(String(p.title ?? ""), q))
+  ) {
     return mcpRawJson;
   }
 
@@ -190,20 +197,25 @@ export async function enrichSearchCatalogWithStorefront(
       .filter(Boolean),
   );
 
-  const strong = suggestions.filter(
+  let candidates = suggestions.filter(
     (s) => hasStrongTitleMatch(s.title, q) && !mcpIds.has(s.id),
   );
-  if (strong.length === 0) return mcpRawJson;
+  // Empty primary + force: accept top suggest hits even without a full-term
+  // title match (abbreviations / partial names like "kara", "f4").
+  if (candidates.length === 0 && options.force && products.length === 0) {
+    candidates = suggestions.filter((s) => !mcpIds.has(s.id));
+  }
+  if (candidates.length === 0) return mcpRawJson;
 
   // Prefer exact title matches, then keep suggest order for the rest.
   const exactNorm = normalizeTitle(q);
-  strong.sort((a, b) => {
+  candidates.sort((a, b) => {
     const aExact = normalizeTitle(a.title) === exactNorm ? 0 : 1;
     const bExact = normalizeTitle(b.title) === exactNorm ? 0 : 1;
     return aExact - bExact;
   });
 
-  const ids = strong.slice(0, MAX_ENRICH_IDS).map((s) => s.id);
+  const ids = candidates.slice(0, MAX_ENRICH_IDS).map((s) => s.id);
 
   let lookupRaw: string;
   try {

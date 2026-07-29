@@ -21,11 +21,11 @@ export const MAX_COUNT_PAGES = 5;
  * @deprecated Prefer CATEGORY_PAYLOAD_PRODUCTS — kept for older count callers.
  * How many product rows to keep after a full count.
  */
-export const COUNT_PAYLOAD_PRODUCTS = 5;
+export const COUNT_PAYLOAD_PRODUCTS = 15;
 /** Category / "how many" previews: exact total + up to this many products. */
-export const CATEGORY_PAYLOAD_PRODUCTS = 5;
+export const CATEGORY_PAYLOAD_PRODUCTS = 15;
 /** Explicit all/every/list requests: exact total + up to this many products. */
-export const LIST_PAYLOAD_PRODUCTS = 20;
+export const LIST_PAYLOAD_PRODUCTS = 15;
 
 /** Catalog tools whose (empty) results should drive the "no match" fallback. */
 export const CATALOG_TOOLS = new Set<string>([

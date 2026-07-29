@@ -369,8 +369,11 @@ export async function runChatAgent(
         tools: tools,
         // The advisor decides whether to retrieve — never force a search.
         tool_choice: "auto",
+        // gpt-5.6-terra rejects function tools unless reasoning is disabled
+        // on /v1/chat/completions (or callers migrate to /v1/responses).
+        reasoning_effort: "none",
         temperature: 0.3,
-        max_tokens: needsLargeListBudget
+        max_completion_tokens: needsLargeListBudget
           ? LARGE_LIST_COMPLETION_TOKENS
           : MAX_COMPLETION_TOKENS,
       },

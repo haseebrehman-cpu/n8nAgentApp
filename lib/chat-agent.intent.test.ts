@@ -226,6 +226,11 @@ describe("isOffTopicQuery", () => {
     expect(isOffTopicQuery("who is the president of france")).toBe(true);
   });
 
+  it("detects weather and other non-shopping topics", () => {
+    expect(isOffTopicQuery("what's today's weather")).toBe(true);
+    expect(isOffTopicQuery("what's the weather like")).toBe(true);
+  });
+
   it("does not flag shopping or policy questions", () => {
     expect(isOffTopicQuery("what is the price of boxing gloves")).toBe(false);
     expect(isOffTopicQuery("track this order")).toBe(false);
@@ -233,6 +238,9 @@ describe("isOffTopicQuery", () => {
     expect(isOffTopicQuery("what is your return policy")).toBe(false);
     expect(isOffTopicQuery("how many products in sauna vests")).toBe(false);
     expect(isOffTopicQuery("how many boxing gloves")).toBe(false);
+    expect(isOffTopicQuery("do you sell football boots")).toBe(false);
+    expect(isOffTopicQuery("is there a warranty")).toBe(false);
+    expect(isOffTopicQuery("how do I clean my gloves")).toBe(false);
   });
 
   it("does not flag product follow-ups as off-topic", () => {

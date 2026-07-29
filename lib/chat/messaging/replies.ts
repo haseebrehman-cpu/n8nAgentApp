@@ -13,9 +13,9 @@ export const NOT_AVAILABLE_REPLY =
   "I'd be happy to help you find the right product. Could you tell me a bit more about what you're looking for — for example a category, size, or product name?";
 
 export const DISCOUNT_CODE_REPLY =
-  "We don't share discount or coupon codes in chat. If you'd like, I can show you products that are currently on sale at a reduced price instead.";
+  "We don't share discount or coupon codes in chat. I can show you products that are currently on sale at a reduced price if that helps.";
 
-export const OFF_TOPIC_REPLY = `I'm here to help with ${STORE_NAME} products and shopping-related questions. If you're looking for equipment, product information, pricing, sizes, stock, or recommendations, I'd be happy to help.`;
+export const OFF_TOPIC_REPLY = `I'm here to help with ${STORE_NAME} products only — boxing, MMA, combat sports, and fitness gear. If you're looking for equipment, product information, pricing, sizes, stock, or recommendations, I'd be happy to help.`;
 
 /**
  * Firm, safe reply for dangerous, illegal, or clearly harmful requests. "RDX"

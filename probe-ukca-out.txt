@@ -1,0 +1,86 @@
+UKCA collections: []
+
+==== QUERY: ukca certified products
+picked []
+MCP paginated {
+  "count": 9,
+  "exact": true,
+  "rawHit": 9,
+  "filtered": false,
+  "titles": [
+    "RDX F6 KARA MMA Shin Instep Guards",
+    "RDX Head Guard Aura Plus T-17",
+    "RDX Shin Instep Aura Plus T-17",
+    "RDX H1 Groin Guard with Gel Cup",
+    "RDX T2 Karate Chest Guard",
+    "RDX T5 Coach Body Protector",
+    "RDX SHIN INSTEP AURA PLUS T-17 Red",
+    "RDX APEX Coach Body protector",
+    "RDX T15 Noir Black Shin Instep Guards"
+  ]
+}
+
+==== QUERY: ukca
+picked []
+MCP paginated {
+  "count": 18,
+  "exact": true,
+  "rawHit": 18,
+  "filtered": false,
+  "titles": [
+    "RDX F6 KARA Head Guard Black",
+    "RDX F6 KARA Kids Headgear",
+    "RDX F6 KARA Groin Guard",
+    "RDX F6 KARA MMA Shin Instep Guards",
+    "RDX T1 Black Shin Instep Guards",
+    "RDX Head Guard Aura Plus T-17",
+    "RDX Shin Instep Aura Plus T-17",
+    "RDX H1 Groin Guard support with Gel Cup",
+    "RDX T2 Karate Chest Guard",
+    "RDX H1 Groin Guard with Gel Cup",
+    "RDX T15 Noir Body Protector",
+    "RDX F6 KARA Shin Instep Guards",
+    "RDX APEX Coach Body protector",
+    "RDX L1 Mark Pro Body Protector",
+    "RDX T15 Noir Abdo Guard",
+    "RDX T5 Coach Body Protector",
+    "RDX SHIN INSTEP AURA PLUS T-17 Red",
+    "RDX T15 Noir Black Shin Instep Guards"
+  ]
+}
+
+==== QUERY: ukca certified
+picked []
+MCP paginated {
+  "count": 17,
+  "exact": true,
+  "rawHit": 17,
+  "filtered": false,
+  "titles": [
+    "RDX F6 KARA Head Guard Black",
+    "RDX F6 KARA Kids Headgear",
+    "RDX F6 KARA MMA Shin Instep Guards",
+    "RDX F6 KARA Groin Guard",
+    "RDX Head Guard Aura Plus T-17",
+    "RDX T1 Black Shin Instep Guards",
+    "RDX Shin Instep Aura Plus T-17",
+    "RDX H1 Groin Guard with Gel Cup",
+    "RDX T2 Karate Chest Guard",
+    "RDX MMA Knee Pads",
+    "RDX F6 KARA Shin Instep Guards",
+    "RDX T15 Noir Body Protector",
+    "RDX L1 Mark Pro Body Protector",
+    "RDX SHIN INSTEP AURA PLUS T-17 Red",
+    "RDX T5 Coach Body Protector",
+    "RDX APEX Coach Body protector",
+    "RDX T15 Noir Black Shin Instep Guards"
+  ]
+}
+
+==== runTool category browse
+<CATALOG_DATA>
+{"query":"ukca certified products","productCount":15,"products":[{"id":"gid://shopify/Product/8667972337974","title":"RDX F6 KARA Head Guard Black","url":"https://rdxsports.co.uk/products/f6-kara-head-guard","price":"£34.99","wasPrice":null,"onSale":false,"inStock":true,"summary":"Employ the ultimate protection by integrating the newest RDX head guard into your training. Manufactured using Maya Hide leather, the head guard is not only comfortable but also ticks all the boxes on the protection fron…","productOptions":[{"name":"Color","values":["Black","Golden","Red","Pink","Silver","White"]},{"name":"Size","values":["S","M","L","XL"]}],"variants":[{"title":"Black / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326305222966","sku":"HGR-F6MB-S"},{"title":"Black / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857298230","sku":"HGR-F6MB-M"},{"title":"Black / L","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857330998","sku":"HGR-F6MB-L"},{"title":"Golden / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857363766","sku":"HGR-F6MGL-S"},{"title":"Black / XL","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857396534","sku":"HGR-F6MB-XL"},{"title":"Golden / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857429302","sku":"HGR-F6MGL-M"},{"title":"Red / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857462070","sku":"HGR-F6MR-S"},{"title":"Golden / L","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857494838","sku":"HGR-F6MGL-L"},{"title":"Red / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857527606","sku":"HGR-F6MR-M"},{"title":"Golden / XL","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857560374","sku":"HGR-F6MGL-XL"}],"options":[{"title":"Black / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326305222966","sku":"HGR-F6MB-S"},{"title":"Black / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857298230","sku":"HGR-F6MB-M"},{"title":"Black / L","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857330998","sku":"HGR-F6MB-L"},{"title":"Golden / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857363766","sku":"HGR-F6MGL-S"},{"title":"Black / XL","available":true,"pric
+
+==== runTool list all
+<CATALOG_DATA>
+{"query":"ukca certified products","productCount":15,"products":[{"id":"gid://shopify/Product/8667972337974","title":"RDX F6 KARA Head Guard Black","url":"https://rdxsports.co.uk/products/f6-kara-head-guard","price":"£34.99","wasPrice":null,"onSale":false,"inStock":true,"summary":"Employ the ultimate protection by integrating the newest RDX head guard into your training. Manufactured using Maya Hide leather, the head guard is not only comfortable but also ticks all the boxes on the protection fron…","productOptions":[{"name":"Color","values":["Black","Golden","Red","Pink","Silver","White"]},{"name":"Size","values":["S","M","L","XL"]}],"variants":[{"title":"Black / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326305222966","sku":"HGR-F6MB-S"},{"title":"Black / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857298230","sku":"HGR-F6MB-M"},{"title":"Black / L","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857330998","sku":"HGR-F6MB-L"},{"title":"Golden / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857363766","sku":"HGR-F6MGL-S"},{"title":"Black / XL","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857396534","sku":"HGR-F6MB-XL"},{"title":"Golden / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857429302","sku":"HGR-F6MGL-M"},{"title":"Red / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857462070","sku":"HGR-F6MR-S"},{"title":"Golden / L","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857494838","sku":"HGR-F6MGL-L"},{"title":"Red / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857527606","sku":"HGR-F6MR-M"},{"title":"Golden / XL","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857560374","sku":"HGR-F6MGL-XL"}],"options":[{"title":"Black / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326305222966","sku":"HGR-F6MB-S"},{"title":"Black / M","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857298230","sku":"HGR-F6MB-M"},{"title":"Black / L","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857330998","sku":"HGR-F6MB-L"},{"title":"Golden / S","available":true,"price":"£34.99","id":"gid://shopify/ProductVariant/47326857363766","sku":"HGR-F6MGL-S"},{"title":"Black / XL","available":true,"pric

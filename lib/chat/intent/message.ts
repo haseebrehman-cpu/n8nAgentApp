@@ -364,7 +364,7 @@ export function isProductFollowUpQuery(text: string): boolean {
   // 4. Pronoun / attribute follow-ups tied to prior product context
   if (
     /\b(them|these|those|it|that|this|ones?)\b/i.test(t) &&
-    /\b(oz|ounce|size|weight|material|use|purpose|colour|color|stock|price|cheaper|cheapest|expensive|heavier|lighter|options?|available|lowest|highest|discount|discounted|discounts|sale|savings|kids?|adults?|sparring|training|competition|leather|synthetic)\b/i.test(
+    /\b(oz|ounce|size|weight|material|use|purpose|colour|color|stock|price|cheaper|cheapest|expensive|heavier|lighter|options?|available|lowest|highest|discount|discounted|discounts|sale|savings|kids?|adults?|sparring|training|competition|leather|synthetic|vegan|clean|care|warranty|rating|review|certified|beginner|professional|pro)\b/i.test(
       t,
     )
   ) {
@@ -406,9 +406,16 @@ export function isOffTopicQuery(text: string): boolean {
   if (isProductFollowUpQuery(t)) return false;
   if (isBareOrderNumberToken(t) || isValidEmailInput(t)) return false;
 
-  // Geography / trivia / general knowledge
+  // Geography / trivia / general knowledge / weather / news
   if (
     /\b(capital\s+of|who\s+is|who\s+was|when\s+was|when\s+did|what\s+is\s+the\s+capital|president\s+of|prime\s+minister)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(weather|forecast|temperature\s+outside|news\s+today|stock\s+market|lottery)\b/i.test(
       t,
     )
   ) {
@@ -430,7 +437,7 @@ export function isOffTopicQuery(text: string): boolean {
     /^(what(?:'s|\s+is)|who(?:'s|\s+is)|where(?:'s|\s+is)|when(?:'s|\s+is)|why(?:'s|\s+is)|how\s+(?:do|does|did|can|many|much)\b)/i.test(
       t,
     ) &&
-    !/\b(products?|items?|price|cost|size|stock|colour|color|order|shipping|delivery|discount|sale|buy|gloves?|vests?|suits?|guards?|mats?|wraps?|bags?|belts?|shin|sauna|sweat|kit|bundle|boxing|mma|store|available|difference|different|compare|versus|\bvs\b|better|which|policy|policies|return|refund)\b/i.test(
+    !/\b(products?|items?|price|cost|size|stock|colour|color|order|shipping|delivery|discount|sale|buy|gloves?|vests?|suits?|guards?|mats?|wraps?|bags?|belts?|shin|sauna|sweat|kit|bundle|boxing|mma|store|available|difference|different|compare|versus|\bvs\b|better|which|policy|policies|return|refund|warranty|exchange|vegan|leather|clean|care|rating|review|certified|certification)\b/i.test(
       t,
     )
   ) {
@@ -475,7 +482,7 @@ export function shouldForceProductSearch(text: string): boolean {
 
   // Pure policy / shipping / store-info questions belong to the policies tool.
   if (
-    /\b(ship|shipping|delivery|hours?|opening|return|refund|damaged|place\s+(an\s+)?order|policy|policies)\b/.test(
+    /\b(ship|shipping|delivery|hours?|opening|return|refund|damaged|place\s+(an\s+)?order|policy|policies|warranty|exchange|international)\b/.test(
       t,
     ) &&
     !/\b(product|price|size|stock|colour|color|available|gloves|guard|kit|bundle)\b/.test(

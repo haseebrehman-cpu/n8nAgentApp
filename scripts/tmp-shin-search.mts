@@ -3,7 +3,7 @@ config({ path: ".env.local" });
 config({ path: ".env" });
 
 const { executeSemanticSearch } = await import(
-  "../lib/chat/search/orchestrator.ts"
+  "../lib/chat/search/orchestrator"
 );
 
 const r = await executeSemanticSearch({

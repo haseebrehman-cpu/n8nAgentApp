@@ -199,7 +199,7 @@ Introduction
 ### What we can try
 
 - Broaden the search (drop colour/budget)
-- Nearby categories we do carry (boxing, MMA, fitness, yoga, etc.)
+- Nearby categories from our live catalog
 - Ask for model name, size, or use-case
 
 ### Next step

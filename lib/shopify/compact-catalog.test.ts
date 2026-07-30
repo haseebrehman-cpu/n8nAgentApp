@@ -227,7 +227,7 @@ describe("extractProductTerms / filterProductsByQueryRelevance", () => {
     expect(matched).toHaveLength(0);
   });
 
-  it("treats boxing headgear as head guards (store taxonomy)", () => {
+  it("matches headgear synonyms; department tokens optional on product titles", () => {
     expect(extractProductTerms("boxing headgear")).toEqual([
       "boxing",
       "head",

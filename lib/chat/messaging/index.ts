@@ -14,6 +14,10 @@ export {
   formatProductCard,
 } from "@/lib/chat/messaging/response-format";
 export {
+  renderProductShortlist,
+  SHORTLIST_DISPLAY_LIMIT,
+} from "@/lib/chat/response/shortlist";
+export {
   RESPONSE_TEMPLATES_PROMPT,
   TEMPLATE_PRODUCT_SEARCH,
   TEMPLATE_PRODUCT_DETAILS,

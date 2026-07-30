@@ -65,6 +65,9 @@ const SUBCATEGORY_SCOPE_MODIFIERS = new Set([
   "beginner",
   "pro",
   "professional",
+  "plain",
+  "basic",
+  "simple",
 ]);
 
 /** True when the query names a subcategory / use-case, not the parent category. */
@@ -193,16 +196,22 @@ function scoreCollection(
   ).length;
   score -= extraTitleTokens * 12;
 
+  // Prefer collections that share distinctive query tokens already counted
+  // above — boost any named department token present in both query and title.
   if (/\bkids?\b/i.test(q)) {
     if (/\bkids?\b/i.test(haystack)) score += 40;
     else score -= 20;
-  } else if (/\bmma\b/i.test(q)) {
-    if (/\bmma\b/i.test(haystack)) score += 40;
-    else score -= 10;
-  } else if (/\bboxing\b/i.test(q) || (terms.includes("head") && terms.includes("guard"))) {
-    // Default "head guards" / "boxing headgear" → Boxing menu collection.
-    if (/\bboxing\b/i.test(haystack)) score += 40;
-    if (/\bmma\b/i.test(haystack)) score -= 15;
+  }
+  for (const term of terms) {
+    if (term.length < 3) continue;
+    if (
+      /^(glove|guard|bag|mat|wrap|shoe|boot|belt|pad|strap|block|head|shin|mouth|hand|punch)s?$/i.test(
+        term,
+      )
+    ) {
+      continue;
+    }
+    if (haystack.includes(term)) score += 40;
   }
 
   // Prefer tighter, dedicated category handles.
@@ -235,21 +244,28 @@ function collectionFitsParentAggregation(
     return false;
   }
 
-  const queryHasMma = /\bmma\b/i.test(q);
-  const queryHasBoxing = /\bboxing\b/i.test(q);
-
-  if (queryHasMma && !queryHasBoxing) {
-    return /\bmma\b/i.test(haystack);
+  // When the shopper names a department token, keep collections rooted in that
+  // department (handle/title prefix) — works for any future department name.
+  const distinctive = terms.filter(
+    (term) =>
+      term.length >= 3 &&
+      !/^(glove|guard|bag|mat|wrap|shoe|boot|belt|pad|strap|block|head|shin|mouth|hand|punch|set|kit)s?$/i.test(
+        term,
+      ),
+  );
+  if (distinctive.length > 0) {
+    const primary = distinctive[0]!;
+    const titleLower = title.toLowerCase();
+    const rooted =
+      handle === primary ||
+      handle.startsWith(`${primary}-`) ||
+      titleLower === primary ||
+      titleLower.startsWith(`${primary} `) ||
+      titleLower.startsWith(`${primary}-`);
+    return rooted && distinctive.every((term) => haystack.includes(term));
   }
-  if (queryHasBoxing && !queryHasMma) {
-    return !/\bmma\b/i.test(haystack);
-  }
 
-  // Bare "head guards" defaults to the Boxing menu collection, not MMA.
-  if (terms.includes("head") && terms.includes("guard")) {
-    return /\bboxing\b/i.test(haystack) && !/\bmma\b/i.test(haystack);
-  }
-
+  // No distinctive department token — allow any non-marketing term match.
   return true;
 }
 

@@ -37,3 +37,24 @@ export {
   filterProductsByBudget,
   filterProductsOnSale,
 } from "@/lib/chat/search/post-filter";
+export {
+  normalizeCanonicalSearch,
+  extractExperienceSignal,
+} from "@/lib/chat/search/normalize";
+export {
+  dedupeByProductId,
+  stableProductSort,
+  normalizeProductOrdering,
+  uniqueProductCount,
+} from "@/lib/chat/search/ranking";
+export { createSearchService, SearchService } from "@/lib/chat/search/service";
+export {
+  lookupCanonicalCache,
+  cacheKey,
+  buildFilterKey,
+} from "@/lib/chat/search/canonical-cache";
+export {
+  excludeIconicProductsUnlessRequested,
+  isIconicProduct,
+  queryRequestsIconic,
+} from "@/lib/chat/search/iconic-filter";

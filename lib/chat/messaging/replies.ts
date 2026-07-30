@@ -20,9 +20,9 @@ I don't have a clear match for that yet.
 
 ### What helps me search
 
-- A category (boxing gloves, head guards, yoga mats…)
-- A model name (F4, T15, Kara…)
-- Size, colour, or use (sparring, bag work, beginners)
+- A category or product type
+- A model name
+- Size, colour, budget, or use-case
 
 ### Next step
 
@@ -42,7 +42,7 @@ Would you like to see what's on sale right now?`;
 
 export const OFF_TOPIC_REPLY = `### ${STORE_NAME} shopping help
 
-I only help with ${STORE_NAME} products — boxing, MMA, combat sports, and fitness gear.
+I only help with ${STORE_NAME} products and shopping questions.
 
 ### I can help with
 

@@ -1,9 +1,8 @@
 /**
  * Ecommerce customer-journey intent detection.
  *
- * Maps realistic shopper asks (best sellers, gifts, cancel order, greeting…)
- * onto a small set of journey kinds so the agent can route, rewrite searches,
- * or return deterministic sales-floor replies.
+ * Merchandising journeys set preference/filter signals — they do NOT rewrite
+ * to hardcoded store-specific product queries.
  */
 
 export type JourneyKind =
@@ -29,10 +28,15 @@ export type JourneyKind =
 
 export interface JourneyMatch {
   kind: Exclude<JourneyKind, null>;
-  /** Canonical semantic search query when the journey needs catalog retrieval. */
+  /**
+   * Optional search hint derived from the customer's own words (never a
+   * hardcoded category/product string from the store taxonomy).
+   */
   searchQuery?: string;
   /** Max price in major units when a budget was parsed (e.g. 35 for "under £35"). */
   budgetMax?: number;
+  experience?: "beginner" | "intermediate" | "professional";
+  onSaleOnly?: boolean;
 }
 
 /** Social openers — no catalog search. */
@@ -93,6 +97,19 @@ export function extractBudgetMax(text: string): number | null {
 }
 
 /**
+ * Strip journey cue words so the remaining text can be used as a search hint.
+ */
+function customerSearchHint(text: string): string {
+  return text
+    .replace(
+      /\b(best\s*sellers?|best\s*selling|new\s*arrivals?|trending|on\s+sale|clearance|gift\s+ideas?|recommend(?:ation)?s?|for\s+beginners?|beginner|professional|pro\s+level)\b/gi,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Resolve the primary ecommerce journey for this turn.
  * Order matters: social → post-purchase → merchandising → null.
  */
@@ -110,21 +127,22 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
   if (isContactSupportRequest(t)) return { kind: "contact_support" };
 
   const lower = t.toLowerCase();
+  const hint = customerSearchHint(t);
 
   if (
     /\b(best\s*sellers?|best\s*selling|top\s+sellers?|most\s+popular\s+products?)\b/i.test(
       lower,
     )
   ) {
-    return { kind: "best_sellers", searchQuery: "best sellers" };
+    return { kind: "best_sellers", searchQuery: hint || "best sellers" };
   }
 
   if (/\b(new\s*arrivals?|just\s+in|latest\s+products?|newest)\b/i.test(lower)) {
-    return { kind: "new_arrivals", searchQuery: "new arrivals" };
+    return { kind: "new_arrivals", searchQuery: hint || "new arrivals" };
   }
 
   if (/\b(trending|what'?s\s+hot|popular\s+right\s+now)\b/i.test(lower)) {
-    return { kind: "trending", searchQuery: "trending" };
+    return { kind: "trending", searchQuery: hint || "trending" };
   }
 
   if (
@@ -132,7 +150,11 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
       lower,
     )
   ) {
-    return { kind: "on_sale", searchQuery: "products on sale" };
+    return {
+      kind: "on_sale",
+      searchQuery: hint || t,
+      onSaleOnly: true,
+    };
   }
 
   if (
@@ -141,52 +163,35 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
       lower,
     )
   ) {
-    return { kind: "gift", searchQuery: normalizeGiftQuery(t) };
+    return { kind: "gift", searchQuery: hint || t };
   }
 
-  if (
-    /\b(beginner|beginners|starter|new\s+to\s+(?:boxing|mma|training))\b/i.test(
-      lower,
-    )
-  ) {
+  if (/\b(beginner|beginners|starter|i'?m\s+new|new\s+to)\b/i.test(lower)) {
     return {
       kind: "beginner",
-      searchQuery: /\bgloves?\b/i.test(lower)
-        ? "beginner boxing gloves"
-        : "beginner boxing kit",
+      searchQuery: hint || t,
+      experience: "beginner",
     };
   }
 
   if (
-    /\b(professional|pro\s+level|competition\s+grade|advanced)\b/i.test(lower) &&
-    /\b(glove|guard|recommend|gear|kit|product)\b/i.test(lower)
+    /\b(professional|pro\s+level|competition\s+grade|advanced|i\s+compete)\b/i.test(
+      lower,
+    )
   ) {
     return {
       kind: "professional",
-      searchQuery: /\bgloves?\b/i.test(lower)
-        ? "competition boxing gloves"
-        : "professional boxing gear",
+      searchQuery: hint || t,
+      experience: "professional",
     };
   }
 
   if (
-    /\b(accessor(?:y|ies)|what\s+else|go\s+with\s+(?:it|these|them)|pair\s+with|hand\s+wraps?\s+too)\b/i.test(
+    /\b(accessor(?:y|ies)|what\s+else|go\s+with\s+(?:it|these|them)|pair\s+with)\b/i.test(
       lower,
     )
   ) {
-    // "gloves and accessories like wraps…" is a glove-first kit ask — do not
-    // rewrite catalog search to wraps/mouthguard only. Pure add-on follow-ups
-    // ("what else", "go with these") still use the accessories journey.
-    const gloveFirstKit =
-      /\bgloves?\b/i.test(lower) &&
-      /\baccessor(?:y|ies)\b/i.test(lower) &&
-      lower.search(/\bgloves?\b/i) < lower.search(/\baccessor/i) &&
-      !/\b(what\s+else|go\s+with|pair\s+with|hand\s+wraps?\s+too)\b/i.test(
-        lower,
-      );
-    if (!gloveFirstKit) {
-      return { kind: "accessories", searchQuery: "hand wraps mouthguard" };
-    }
+    return { kind: "accessories", searchQuery: hint || "accessories" };
   }
 
   if (
@@ -194,10 +199,7 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
       lower,
     )
   ) {
-    return {
-      kind: "fbt",
-      searchQuery: "boxing accessories hand wraps mouthguard",
-    };
+    return { kind: "fbt", searchQuery: hint || t };
   }
 
   if (
@@ -209,25 +211,15 @@ export function resolveCustomerJourney(text: string): JourneyMatch | null {
   }
 
   const budgetMax = extractBudgetMax(t);
-  if (budgetMax != null && /\b(glove|guard|bag|recommend|budget|cheap)\b/i.test(lower)) {
-    // Keep budget journey, but do not pass a full kit laundry-list as the
-    // search query — primary product focus happens in query rewrite too.
+  if (budgetMax != null) {
     return {
       kind: "budget",
-      searchQuery: t,
+      searchQuery: hint || t,
       budgetMax,
     };
   }
 
   return null;
-}
-
-function normalizeGiftQuery(text: string): string {
-  const t = text.trim();
-  if (/\b(boxing|mma|fitness|yoga)\b/i.test(t)) {
-    return `${t} gift`;
-  }
-  return "gifts boxing gloves";
 }
 
 /** Journeys that should force a catalog search on the first tool round. */

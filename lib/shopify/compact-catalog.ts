@@ -426,22 +426,7 @@ export function extractProductTerms(query: string): string[] {
   return [...new Set(expanded)];
 }
 
-/**
- * Sport/nav context words that should not be required in every product title.
- * "boxing head guards" still means Head Guards (store menu), not titles that
- * literally contain "boxing".
- */
-const OPTIONAL_SPORT_CONTEXT = new Set([
-  "boxing",
-  "mma",
-  "fitness",
-  "yoga",
-  "training",
-  "sparring",
-  "competition",
-]);
-
-/** Terms used for relevance matching (after dropping optional sport context). */
+/** Terms used for relevance matching — keep department tokens for collection routing. */
 export function matchTermsForQuery(query: string): string[] {
   const terms = extractProductTerms(query);
   const hasGlove = terms.includes("glove");
@@ -473,9 +458,6 @@ export function matchTermsForQuery(query: string): string[] {
     );
   }
 
-  if (terms.includes("head") && terms.includes("guard")) {
-    return terms.filter((t) => !OPTIONAL_SPORT_CONTEXT.has(t));
-  }
   return terms;
 }
 
@@ -592,13 +574,39 @@ function productMatchesQueryTerms(
  *    (so "head guards" never becomes every shin/groin/mouth guard).
  * 4. If still nothing matches, return empty for known product nouns.
  */
+/**
+ * Product titles often omit the department name ("Head Guard" vs "mma head
+ * guards"). For guard-family queries, require only the guard type tokens when
+ * filtering titles — department tokens remain in matchTermsForQuery for
+ * collection routing.
+ */
+function termsForProductFilter(terms: string[]): string[] {
+  const guardType =
+    terms.includes("guard") &&
+    (terms.includes("head") ||
+      terms.includes("shin") ||
+      terms.includes("mouth") ||
+      terms.includes("groin"));
+  if (!guardType) return terms;
+  return terms.filter(
+    (t) =>
+      t === "head" ||
+      t === "shin" ||
+      t === "mouth" ||
+      t === "groin" ||
+      t === "guard" ||
+      GUARD_TYPE_MODIFIERS.has(t),
+  );
+}
+
 export function filterProductsByQueryRelevance<
   T extends { title: string; collections?: string[] },
 >(
   products: T[],
   query: string
 ): { products: T[]; filtered: boolean; kind: string | null } {
-  const terms = matchTermsForQuery(query);
+  const allTerms = matchTermsForQuery(query);
+  const terms = termsForProductFilter(allTerms);
   if (terms.length === 0 || products.length === 0) {
     return { products, filtered: false, kind: null };
   }
@@ -868,12 +876,37 @@ export interface CompactCatalogOptions {
    * when softRelevance is false (model codes / counts).
    */
   softRelevance?: boolean;
+  /**
+   * When true, keep Iconic Range / Iconic Gear products. Default: false unless
+   * the query explicitly asks for iconic.
+   */
+  includeIconic?: boolean;
   /** Search confidence band from the orchestrator (empty|low|partial|high). */
   searchConfidence?: string;
   /** True when a broader-query or suggest fallback produced these results. */
   fallbackApplied?: boolean;
   /** True when results were filtered from session lastShownProducts. */
   reusedContext?: boolean;
+}
+
+/** Iconic Range / Iconic Gear promo line — omit unless the customer asks. */
+function isIconicCompactProduct(product: CompactProduct): boolean {
+  const haystack = [
+    product.title,
+    product.url ?? "",
+    ...(product.collections ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return /\biconic\b/.test(haystack);
+}
+
+function shouldIncludeIconic(
+  options: CompactCatalogOptions,
+): boolean {
+  if (options.includeIconic === true) return true;
+  if (options.includeIconic === false) return false;
+  return /\biconic\b/i.test(options.query ?? "");
 }
 
 /**
@@ -906,6 +939,10 @@ export function compactCatalogMcpText(
       .filter((p): p is CompactProduct => Boolean(p));
 
     products = dedupeProductsById(products);
+
+    if (!shouldIncludeIconic(options)) {
+      products = products.filter((p) => !isIconicCompactProduct(p));
+    }
 
     const rawCount = products.length;
     let relevanceFiltered = false;

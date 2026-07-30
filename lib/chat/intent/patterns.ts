@@ -1,7 +1,7 @@
 /**
- * Shared regular expressions and phrase sets used by the intent classifiers.
- * Centralised here so the matching rules live in one place and each classifier
- * module stays focused on decision logic rather than pattern definitions.
+ * Shared regular expressions used by intent classifiers.
+ * Store taxonomy (categories/collections) is discovered dynamically — do not
+ * maintain category phrase lists here.
  */
 
 /** Phrases that mean the customer wants order tracking (not a product search). */
@@ -9,116 +9,49 @@ export const ORDER_TRACKING_INTENT_RE =
   /\b(?:track(?:\s+(?:my|this|the|an|your))?\s+order|track\s+order|order\s+(?:track(?:ing)?|status)|where(?:'?s|\s+is)\s+my\s+(?:order|package|parcel|shipment)|check(?:\s+(?:my|this|the))?\s+(?:order|shipment|package|parcel)|track(?:\s+(?:my|this|the))?\s+(?:shipment|package|parcel)|track your order)\b/i;
 
 /**
- * Dangerous, illegal, or clearly harmful topics. "RDX" is our brand name but is
- * also a military explosive, so shoppers occasionally ask about bombs/explosives
- * (e.g. "rdx bomb", "how to make rdx"). Always refuse those and redirect. Kept
- * to unambiguous terms so real combat-sports/fitness products are never blocked.
+ * Dangerous or clearly harmful topics. Brand names that collide with
+ * explosives (e.g. RDX) are handled carefully — refuse bomb/explosive asks.
  */
 export const HARMFUL_QUERY_RE =
   /\b(bombs?|explosives?|detonat\w*|grenades?|c-?4|tnt|dynamite|ied|gunpowder|ammunition|firearms?|pistols?|rifles?|handguns?|shotguns?|silencers?|molotov|napalm|anthrax|nerve\s+agent|sarin|ricin|poison\w*|meth(?:amphetamine)?|cocaine|heroin|fentanyl|assassinat\w*|terroris\w*|how\s+to\s+(?:make|build|create)\s+(?:a\s+|an\s+|the\s+)?(?:bomb|rdx|explosive|weapon))\b/i;
 
-/** Common single-word typos → intended browse terms (applied before search). */
+/** Generic typos → intended terms (spelling aids, not category menus). */
 export const QUERY_TYPO_MAP: Record<string, string> = {
+  beginer: "beginner",
+  begginer: "beginner",
+  lether: "leather",
+  acessories: "accessories",
+  acessory: "accessory",
+  colour: "color",
+  colours: "colors",
+  glovse: "gloves",
+  glooves: "gloves",
+  glovs: "gloves",
   bosing: "boxing",
   boxng: "boxing",
   boxin: "boxing",
   boxnig: "boxing",
-  glovse: "gloves",
-  glooves: "gloves",
-  glovs: "gloves",
-  glovea: "gloves",
   sparrin: "sparring",
-  beginer: "beginner",
-  begginer: "beginner",
-  lether: "leather",
   shein: "shin",
   shinguard: "shin guard",
   headgeer: "headgear",
   mouthgaurd: "mouthguard",
   mouthgard: "mouthguard",
-  acessories: "accessories",
-  acessory: "accessory",
 };
 
 /**
- * Product series / model codes (F4, F6, T15, AS2). Requires a letter before
+ * Product series / model codes (letter + digits). Requires a letter before
  * digits so bare sizes like "14oz" are not treated as named models.
  */
 export const PRODUCT_MODEL_CODE_RE = /\b[a-z]{1,3}\d{1,4}[a-z]{0,2}\b/i;
 
 /**
- * Ultra-broad sport / department words that need ONE clarifying question
- * before catalog search (e.g. bare "boxing").
+ * @deprecated Category discovery is dynamic. Kept as empty for backward
+ * compatible imports; clarification uses live collections instead.
  */
-export const BROAD_TOPIC_PHRASES = new Set<string>([
-  "boxing",
-  "mma",
-  "fitness",
-  "yoga",
-  "kids",
-  "apparel",
-  "clothing",
-  "equipment",
-  "gym equipment",
-  "fitness equipment",
-  "protection",
-  "accessories",
-  "nutrition",
-  "protein",
-  "sauna",
-]);
+export const BROAD_TOPIC_PHRASES = new Set<string>();
 
 /**
- * Category browse phrases that should usually search immediately once
- * clarification is not required. Ultra-broad sports/departments ("boxing",
- * "mma", "fitness", "gloves", "equipment") are handled by
- * needsProductClarification / BROAD_TOPIC_PHRASES and must NOT force search.
+ * @deprecated Category browse phrases are no longer hardcoded.
  */
-export const CATEGORY_BROWSE_PHRASES = new Set<string>([
-  "boxing gloves",
-  "boxing glove",
-  "mma gloves",
-  "mma glove",
-  "shoes",
-  "boots",
-  "boxing shoes",
-  "boxing boots",
-  "shorts",
-  "wraps",
-  "wrap",
-  "hand wraps",
-  "punch bags",
-  "punch bag",
-  "punching bags",
-  "punching bag",
-  "head guards",
-  "head guard",
-  "headguards",
-  "headguard",
-  "headgear",
-  "headgears",
-  "head gear",
-  "boxing headgear",
-  "boxing head gear",
-  "boxing head guards",
-  "boxing head guard",
-  "mma headgear",
-  "mma head guards",
-  "kids headgear",
-  "kids head guard",
-  "kids head guards",
-  "shin guards",
-  "shin guard",
-  "yoga mats",
-  "yoga mat",
-  "lifting gloves",
-  "lifting glove",
-  "kids gloves",
-  "kids boxing gloves",
-  "belts",
-  "belt",
-  "mouthguard",
-  "mouthguards",
-  "beginner boxing kit",
-  "boxing kit",
-]);
+export const CATEGORY_BROWSE_PHRASES = new Set<string>();

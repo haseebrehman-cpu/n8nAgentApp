@@ -13,6 +13,10 @@ import {
   persistChatToMongo,
 } from "@/lib/chat/persist-mongo";
 import {
+  normalizeCatalogContext,
+  type ConversationCatalogContext,
+} from "@/lib/chat/context/conversation-context";
+import {
   normalizeShownProducts,
   type ShownProduct,
 } from "@/lib/chat/context/product-memory";
@@ -46,6 +50,11 @@ export interface ChatSession {
    * attribute follow-ups ("only blue ones") into a full semantic query.
    */
   lastSearchQuery: string | null;
+  /**
+   * Frozen catalog conversation memory: canonical search, products, filters,
+   * preferences. Follow-ups reuse this before issuing a new live search.
+   */
+  catalogContext: ConversationCatalogContext | null;
   /** Optimistic concurrency token — incremented on every successful persist. */
   version: number;
   updatedAt: number;
@@ -133,6 +142,23 @@ function cloneSession(session: ChatSession): ChatSession {
       ? session.lastShownProducts.map((p) => ({ ...p }))
       : null,
     lastSearchQuery: session.lastSearchQuery,
+    catalogContext: session.catalogContext
+      ? {
+          ...session.catalogContext,
+          products: session.catalogContext.products.map((p) => ({ ...p })),
+          matchingProductIds: [...session.catalogContext.matchingProductIds],
+          previousRecommendationIds: [
+            ...session.catalogContext.previousRecommendationIds,
+          ],
+          filters: { ...session.catalogContext.filters },
+          preferences: {
+            ...session.catalogContext.preferences,
+            goals: session.catalogContext.preferences.goals
+              ? [...session.catalogContext.preferences.goals]
+              : undefined,
+          },
+        }
+      : null,
     version: session.version,
     updatedAt: session.updatedAt,
   };
@@ -162,6 +188,7 @@ function emptySession(id: string): ChatSession {
     pendingCategory: null,
     lastShownProducts: null,
     lastSearchQuery: null,
+    catalogContext: null,
     version: 0,
     updatedAt: Date.now(),
     intent: null,
@@ -208,6 +235,7 @@ function normalizeSession(parsed: Partial<ChatSession> & { id: string }): ChatSe
       parsed.lastSearchQuery.trim()
         ? parsed.lastSearchQuery.trim()
         : null,
+    catalogContext: normalizeCatalogContext(parsed.catalogContext),
     version: asNonNegativeInt(parsed.version),
     updatedAt:
       typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
@@ -532,6 +560,14 @@ export function setLastSearchQuery(
   query: string | null,
 ): void {
   session.lastSearchQuery = query?.trim() ? query.trim() : null;
+}
+
+/** Freeze or clear the full catalog conversation context. */
+export function setCatalogContext(
+  session: ChatSession,
+  context: ConversationCatalogContext | null,
+): void {
+  session.catalogContext = context;
 }
 
 /** Cookie attributes for the opaque session id. */

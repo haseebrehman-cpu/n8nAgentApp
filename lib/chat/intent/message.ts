@@ -8,8 +8,6 @@
 import { isValidEmailInput } from "@/lib/chatbot/orderTracking";
 import type { ChatMessagePayload } from "@/lib/types";
 import {
-  BROAD_TOPIC_PHRASES,
-  CATEGORY_BROWSE_PHRASES,
   PRODUCT_MODEL_CODE_RE,
   QUERY_TYPO_MAP,
 } from "@/lib/chat/intent/patterns";
@@ -257,35 +255,18 @@ export function hasExplicitCatalogListOrCountIntent(key: string): boolean {
 }
 
 /**
- * Broad sport/department or "I need gloves" asks that should get ONE clarifying
- * question instead of an immediate catalog dump (e.g. bare "boxing").
+ * Heuristic for ultra-broad browse asks. Live category discovery is the
+ * authoritative clarifier; this is a fast pre-check for single-token / bare
+ * product-family asks.
  */
 export function needsProductClarification(text: string): boolean {
   const key = normalizeBrowseKey(text);
   if (!key) return false;
   if (hasExplicitCatalogListOrCountIntent(key)) return false;
   if (isCatalogCountQuery(key)) return false;
-
-  // Already narrowed (use-case + product type) — search, don't clarify.
-  if (
-    /\b(training|sparring|competition|boxing|mma|bag|kids?|fitness|workout|lifting)\b/i.test(
-      key,
-    ) &&
-    /\b(gloves?|bags?|guards?|headgears?|shorts?|shoes|boots|pads?|wraps?|mats?)\b/i.test(
-      key,
-    )
-  ) {
-    return false;
-  }
-
-  // Named model / SKU — never clarify, search.
   if (hasNamedProductModel(key)) return false;
 
-  // Bare sport / department: "boxing", "mma", "fitness", "yoga", "kids"…
-  if (BROAD_TOPIC_PHRASES.has(key)) return true;
-  if (/^show\s+boxing$/i.test(key)) return true;
-
-  // "I need gloves", "looking for protection", bare "gloves" / "equipment"
+  // "I need gloves" / "looking for protection" / bare family nouns.
   if (
     /^(?:(?:i\s+)?(?:need|want|looking\s+for|get\s+me|find\s+me)(?:\s+some|\s+any)?\s+)?(?:gloves?|protection(?:\s+gear)?|gear|equipment|gym\s+equipment|fitness\s+equipment)$/i.test(
       key,
@@ -294,31 +275,54 @@ export function needsProductClarification(text: string): boolean {
     return true;
   }
 
+  // Already narrowed: use-case + product type → search.
+  if (
+    /\b(training|sparring|competition|bag|kids?|workout|lifting|beginner|professional)\b/i.test(
+      key,
+    ) &&
+    /\b(gloves?|bags?|guards?|headgears?|shorts?|shoes|boots|pads?|wraps?|mats?|straps?)\b/i.test(
+      key,
+    )
+  ) {
+    return false;
+  }
+
+  // Multi-word product types ("boxing gloves", "yoga mats") → search, not clarify.
+  const words = key.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return false;
+
+  // Single department / family token → clarify.
+  if (words.length === 1 && words[0]!.length >= 3) {
+    return !PRODUCT_MODEL_CODE_RE.test(words[0]!);
+  }
+
   return false;
 }
 
 /**
- * True when the message is only a category browse phrase
- * (e.g. "boxing", "gloves", "boxing gloves").
+ * True when the message looks like a category browse that should search
+ * (multi-word product language), not an ultra-broad clarify-first ask.
  */
 export function isAmbiguousBrowseQuery(text: string): boolean {
   const key = normalizeBrowseKey(text);
   if (!key) return false;
   if (hasExplicitCatalogListOrCountIntent(key)) return false;
-  // Ultra-broad sports/departments need clarification, not an immediate search.
   if (needsProductClarification(key)) return false;
-  // Specific enough already (use-case + product type)
+  if (hasNamedProductModel(key)) return false;
+  if (isOrderTrackingIntent(key) || isOffTopicQuery(key)) return false;
+  // Use-case + product type is specific enough — handled by force-search signals.
   if (
-    /\b(training|sparring|competition|bag|kids?|fitness|workout|lifting)\s+/i.test(
-      key,
-    ) &&
-    /\b(gloves?|bags?|guards?|shorts?|shoes|boots)\b/i.test(key)
+    /\b(training|sparring|competition|bag|kids?|workout|lifting)\b/i.test(key) &&
+    /\b(gloves?|bags?|guards?|shorts?|shoes|boots|mats?|straps?)\b/i.test(key)
   ) {
     return false;
   }
-  // Model / SKU style names should search as specific products
-  if (/\b(rdx|[a-z]*\d+[a-z]*|\d+oz)\b/i.test(key)) return false;
-  return CATEGORY_BROWSE_PHRASES.has(key);
+  // Multi-word with a product noun → browse/search candidate.
+  const words = key.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return false;
+  return /\b(gloves?|bags?|guards?|mats?|straps?|wraps?|shoes|boots|shorts?|belts?|pads?|blocks?|vests?|kits?|gear|accessories)\b/i.test(
+    key,
+  );
 }
 
 /**

@@ -149,14 +149,15 @@ ${topicLine}${lastQueryLine}
 FOLLOW-UP RULES (CRITICAL):
 - Answer compare / cheaper / colour / size / "which one" questions from THIS list first.
 - "show cheaper ones" → pick the lower-priced items from this list (do not restart a new unrelated search).
-- "only blue" / "16 oz" / "leather" → filter this list or merge with Last catalog search query.
-- "back to the F4" / "the gloves from earlier" → resolve from this list + chat history.
-- New unrelated topics ("actually show shin guards") → new search_catalog; keep this memory for later.
+- "only blue" / size / material → filter this list or merge with Last catalog search query.
+- Returning to earlier items → resolve from this list + chat history.
+- New unrelated topics → new catalog search; keep this memory for later.
 - DO NOT call search_catalog for pure rank/compare/filter of products already listed — answer from context.
+- Care questions (wash, wet, outdoor, kids use) are support asks — not a new product dump.
 - Format with response templates: ### headings, hyphen bullets, max 2 sentences per paragraph. No tables. No ids in customer text.
 - Pricing: read prices carefully. On sale ONLY with was-price / On sale tag.
 - Deeper variants/specs → get_product with id. Exact units → get_inventory. Size chart → get_size_chart.
-- After helping, at most ONE soft cross-sell (e.g. wraps with gloves) from real catalog data.
+- After helping, at most ONE soft cross-sell from real catalog data.
 
 Product List:
 ${lines.join("\n")}`;

@@ -1,5 +1,9 @@
 import Chat from "@/app/models/chatModel";
 import {
+  normalizeCatalogContext,
+  type ConversationCatalogContext,
+} from "@/lib/chat/context/conversation-context";
+import {
   normalizeShownProducts,
   type ShownProduct,
 } from "@/lib/chat/context/product-memory";
@@ -22,6 +26,7 @@ export type HydratedChatSession = {
   pendingCategory: string | null;
   lastShownProducts: ShownProduct[] | null;
   lastSearchQuery: string | null;
+  catalogContext: ConversationCatalogContext | null;
   version: number;
   updatedAt: number;
 };
@@ -57,6 +62,7 @@ function contextFieldsFromSession(session: ChatSession) {
     pendingCategory: session.pendingCategory ?? null,
     lastSearchQuery: session.lastSearchQuery ?? null,
     lastShownProducts: session.lastShownProducts ?? undefined,
+    catalogContext: session.catalogContext ?? undefined,
     version: session.version ?? 0,
     isActive: true,
   };
@@ -137,6 +143,7 @@ export async function hydrateSessionFromMongo(
         pendingCategory: 1,
         lastSearchQuery: 1,
         lastShownProducts: 1,
+        catalogContext: 1,
         version: 1,
         updatedAt: 1,
       })
@@ -156,6 +163,7 @@ export async function hydrateSessionFromMongo(
       pendingCategory?: unknown;
       lastSearchQuery?: unknown;
       lastShownProducts?: unknown;
+      catalogContext?: unknown;
       version?: unknown;
       updatedAt?: Date | string | number;
     };
@@ -208,6 +216,7 @@ export async function hydrateSessionFromMongo(
         typeof raw.lastSearchQuery === "string" && raw.lastSearchQuery.trim()
           ? raw.lastSearchQuery.trim()
           : null,
+      catalogContext: normalizeCatalogContext(raw.catalogContext),
       version: asNonNegativeInt(raw.version),
       updatedAt,
     };

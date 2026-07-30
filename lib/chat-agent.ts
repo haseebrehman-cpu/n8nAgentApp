@@ -21,6 +21,7 @@ import {
   addTokenUsage,
   appendAssistantMessage,
   resetConversationState,
+  setCatalogContext,
   setConversationState,
   setLastSearchQuery,
   setLastShownProducts,
@@ -46,7 +47,7 @@ import {
   ORDER_MODIFY_REPLY,
   THANKS_REPLY,
 } from "@/lib/chat/messaging/journey-replies";
-import { buildClarificationReply } from "@/lib/chat/conversation/flow";
+import { resolveDeterministicTurn } from "@/lib/chat/agent/orchestrator";
 import {
   extractEmailFromText,
   extractOrderLookupToken,
@@ -431,17 +432,53 @@ export async function runChatAgent(
 
   const hasShown = Boolean(session.lastShownProducts?.length);
 
-  // Ultra-broad topics ("boxing", "gloves") → one clarifying question, no search.
-  // Skip when they already have a product thread (they may be changing topic with
-  // a short word — still clarify rather than dumping the whole sport catalog).
-  if (
-    needsProductClarification(lastUser) &&
-    !isProductFollowUpQuery(lastUser) &&
-    !isDiscountQuery(lastUser)
-  ) {
-    setSessionIntent(session, "product_information");
-    setPendingCategory(session, lastUser.trim());
-    return finishWithReply(session, buildClarificationReply(lastUser));
+  // Deterministic catalog / care path: shortlists, dynamic clarify, care support.
+  const deterministic = await resolveDeterministicTurn({
+    lastUser,
+    catalogContext: session.catalogContext,
+    lastShownProducts: session.lastShownProducts,
+    journey,
+    signal,
+  });
+
+  if (deterministic.kind === "final_reply") {
+    setSessionIntent(session, deterministic.intent);
+    if (deterministic.pendingCategory !== undefined) {
+      setPendingCategory(session, deterministic.pendingCategory);
+    }
+    if (deterministic.catalogContext !== undefined) {
+      setCatalogContext(session, deterministic.catalogContext ?? null);
+    }
+    if (deterministic.shownProducts !== undefined) {
+      setLastShownProducts(session, deterministic.shownProducts);
+    }
+    if (deterministic.searchQuery) {
+      setLastSearchQuery(session, deterministic.searchQuery);
+    }
+    return finishWithReply(session, deterministic.reply);
+  }
+
+  const skipCatalogSearch =
+    deterministic.kind === "llm_wrap" && deterministic.skipCatalogSearch;
+  const orchestratorBlocks =
+    deterministic.kind === "llm_wrap" ? deterministic.systemBlocks : [];
+  const orchestratorFallback =
+    deterministic.kind === "llm_wrap" ? deterministic.fallbackReply : undefined;
+
+  if (deterministic.kind === "llm_wrap") {
+    setSessionIntent(session, deterministic.intent);
+    if (deterministic.pendingCategory !== undefined) {
+      setPendingCategory(session, deterministic.pendingCategory);
+    }
+    if (deterministic.catalogContext !== undefined) {
+      setCatalogContext(session, deterministic.catalogContext ?? null);
+    }
+    if (deterministic.shownProducts !== undefined) {
+      setLastShownProducts(session, deterministic.shownProducts);
+    }
+    if (deterministic.searchQuery) {
+      setLastSearchQuery(session, deterministic.searchQuery);
+    }
   }
 
   // Used for the honest "no results" fallback and for forcing semantic search.
@@ -452,9 +489,7 @@ export async function runChatAgent(
 
   /**
    * Force search_catalog on the first tool round for clear product discovery.
-   * Skip when: clarification needed, inventory/size follow-ups, or pure
-   * context Q&A about already-shown products (not attribute refinements that
-   * still need a rewritten search / context filter via the tool).
+   * Skip when the orchestrator already built a shortlist / care guidance.
    */
   const refinementNeedsTool =
     (isSearchRefinement(lastUser, session.lastSearchQuery) ||
@@ -468,20 +503,21 @@ export async function runChatAgent(
     hasShown &&
     !refinementNeedsTool &&
     !shouldForceProductSearch(lastUser);
-  // Attribute / cheaper refinements hit search_catalog so the server can filter
-  // lastShownProducts (or merge lastSearchQuery) — don't leave that to chance.
   const merchJourney =
     journey && journeyForcesCatalogSearch(journey.kind) ? journey : null;
   const forceCatalogSearch =
-    Boolean(merchJourney) ||
-    refinementNeedsTool ||
-    round0ForceCatalogSearch(
-      lastUser,
-      productIntent || Boolean(merchJourney),
-      contextOnlyFollowUp,
-    );
+    !skipCatalogSearch &&
+    (Boolean(merchJourney) ||
+      refinementNeedsTool ||
+      round0ForceCatalogSearch(
+        lastUser,
+        productIntent || Boolean(merchJourney),
+        contextOnlyFollowUp,
+      ));
 
-  setSessionIntent(session, resolveTurnIntent(lastUser, session));
+  if (deterministic.kind !== "llm_wrap") {
+    setSessionIntent(session, resolveTurnIntent(lastUser, session));
+  }
 
   // Inject remembered products so the advisor can resolve "these/that/which one"
   // and do variant lookups by id before searching again.
@@ -489,23 +525,24 @@ export async function runChatAgent(
     lastSearchQuery: session.lastSearchQuery,
     pendingCategory: session.pendingCategory,
   });
-  const journeyHint = merchJourney?.searchQuery
-    ? (`JOURNEY HINT (trusted): Customer journey=${merchJourney.kind}. ` +
-        `Call search_catalog with query="${merchJourney.searchQuery}"` +
-        (merchJourney.budgetMax != null
-          ? ` and respect budget under ${merchJourney.budgetMax}`
-          : "") +
-        (merchJourney.kind === "on_sale"
-          ? "; prefer products that are on sale"
-          : "") +
-        (merchJourney.kind === "accessories" || merchJourney.kind === "fbt"
-          ? ". Use the Accessories template; search related add-ons (wraps, mouthguard, etc.)"
-          : "") +
-        (merchJourney.kind === "alternatives"
-          ? ". Find similar alternatives to what they named or last showed"
-          : "") +
-        ". Then reply with the matching response template.")
-    : null;
+  const journeyHint =
+    !skipCatalogSearch && merchJourney?.searchQuery
+      ? (`JOURNEY HINT (trusted): Customer journey=${merchJourney.kind}. ` +
+          `Call search_catalog with query="${merchJourney.searchQuery}"` +
+          (merchJourney.budgetMax != null
+            ? ` and respect budget under ${merchJourney.budgetMax}`
+            : "") +
+          (merchJourney.kind === "on_sale"
+            ? "; prefer products that are on sale"
+            : "") +
+          (merchJourney.kind === "accessories" || merchJourney.kind === "fbt"
+            ? ". Search related add-ons from the catalog"
+            : "") +
+          (merchJourney.kind === "alternatives"
+            ? ". Find similar alternatives to what they named or last showed"
+            : "") +
+          ". Then reply naturally using the product facts.")
+      : null;
   let marketHint: string | null = null;
   try {
     const { marketCountry } = getShopifyConfig();
@@ -518,6 +555,9 @@ export async function runChatAgent(
   const conversation: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...(contextBlock ? [{ role: "system", content: contextBlock } as const] : []),
+    ...orchestratorBlocks.map(
+      (content) => ({ role: "system", content }) as const,
+    ),
     ...(journeyHint
       ? [{ role: "system", content: journeyHint } as const]
       : []),
@@ -528,10 +568,16 @@ export async function runChatAgent(
   let sawEmptyCatalog = false;
   let sawCatalogInfraFailure = false;
   let needsLargeListBudget = false;
-  let capturedProducts: ShownProduct[] | null = null;
+  let capturedProducts: ShownProduct[] | null =
+    deterministic.kind === "llm_wrap"
+      ? deterministic.shownProducts ?? null
+      : null;
   let capturedSizeChart: ChatAttachment | null = null;
-  let capturedSearchQuery: string | null = null;
-  let catalogToolUsed = false;
+  let capturedSearchQuery: string | null =
+    deterministic.kind === "llm_wrap"
+      ? deterministic.searchQuery ?? null
+      : null;
+  let catalogToolUsed = skipCatalogSearch;
 
   /** Persist the reply and any freshly shown products for the next turn. */
   const finish = (
@@ -542,10 +588,14 @@ export async function runChatAgent(
     if (capturedProducts && capturedProducts.length > 0) {
       setLastShownProducts(session, capturedProducts);
     }
-    // Keep pendingCategory as the topic/clarification label — do not overwrite
-    // it with the rewritten semantic search query (that lives in lastSearchQuery).
     if (capturedSearchQuery) {
       setLastSearchQuery(session, capturedSearchQuery);
+    }
+    if (session.catalogContext || deterministic.kind === "llm_wrap") {
+      // Keep frozen catalog context in sync with shown products.
+      if (deterministic.kind === "llm_wrap" && deterministic.catalogContext) {
+        setCatalogContext(session, deterministic.catalogContext);
+      }
     }
     return finishWithReply(
       session,
@@ -677,12 +727,15 @@ export async function runChatAgent(
       );
     } catch (err) {
       if (signal.aborted) {
-        return finish(FALLBACK_REPLY);
+        return finish(orchestratorFallback || FALLBACK_REPLY);
       }
       logger.error("chat-agent", "openai completion failed", {
         requestId,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (orchestratorFallback) {
+        return finish(orchestratorFallback);
+      }
       return finish(
         sawCatalogInfraFailure || productIntent
           ? SERVICE_UNAVAILABLE_REPLY
@@ -720,7 +773,10 @@ export async function runChatAgent(
       if (sawCatalogInfraFailure) {
         return finish(SERVICE_UNAVAILABLE_REPLY);
       }
-      let reply = polishCustomerReply(message.content ?? "") || FALLBACK_REPLY;
+      let reply =
+        polishCustomerReply(message.content ?? "") ||
+        orchestratorFallback ||
+        FALLBACK_REPLY;
       if (choice.finish_reason === "length") {
         reply = reply
           ? `${reply.trim()}\n\n_(List was cut short — ask me to continue or show the next set.)_`
@@ -734,13 +790,13 @@ export async function runChatAgent(
         ) ||
           reply.length < 12)
       ) {
-        return finish(NOT_AVAILABLE_REPLY);
+        return finish(orchestratorFallback || NOT_AVAILABLE_REPLY);
       }
       // Empty model content after a successful empty catalog → honest no-results.
       if (productIntent && sawEmptyCatalog && !reply.trim()) {
-        return finish(NOT_AVAILABLE_REPLY);
+        return finish(orchestratorFallback || NOT_AVAILABLE_REPLY);
       }
-      return finish(reply || FALLBACK_REPLY);
+      return finish(reply || orchestratorFallback || FALLBACK_REPLY);
     }
 
     conversation.push(message);
@@ -776,7 +832,7 @@ export async function runChatAgent(
               )
                 ? err
                 : ORDER_LOOKUP_FAILED_REPLY;
-            return finish(safe, "idle");
+            return finish(safe, "idle");  
           }
         } catch {
           // fall through
@@ -797,6 +853,9 @@ export async function runChatAgent(
 
   if (sawCatalogInfraFailure) {
     return finish(SERVICE_UNAVAILABLE_REPLY);
+  }
+  if (orchestratorFallback) {
+    return finish(orchestratorFallback);
   }
   return finish(
     productIntent && sawEmptyCatalog ? NOT_AVAILABLE_REPLY : FALLBACK_REPLY,

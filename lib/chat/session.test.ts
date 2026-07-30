@@ -20,6 +20,7 @@ function makeSession(): ChatSession {
     pendingCategory: null,
     lastShownProducts: null,
     lastSearchQuery: null,
+    catalogContext: null,
     version: 0,
     updatedAt: Date.now(),
     intent: null,

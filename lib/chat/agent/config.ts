@@ -22,10 +22,15 @@ export const MAX_COUNT_PAGES = 5;
  * How many product rows to keep after a full count.
  */
 export const COUNT_PAYLOAD_PRODUCTS = 15;
-/** Category / "how many" previews: exact total + up to this many products. */
-export const CATEGORY_PAYLOAD_PRODUCTS = 15;
+/**
+ * How many products to keep in the tool/session payload for follow-ups.
+ * Customer-facing shortlists show SHORTLIST_DISPLAY_LIMIT (5).
+ */
+export const CATEGORY_PAYLOAD_PRODUCTS = 20;
 /** Explicit all/every/list requests: exact total + up to this many products. */
-export const LIST_PAYLOAD_PRODUCTS = 15;
+export const LIST_PAYLOAD_PRODUCTS = 20;
+/** Customer-facing products shown initially in a listing. */
+export const SHORTLIST_DISPLAY_LIMIT = 5;
 
 /**
  * TEMP: order tracking is disabled. Flip to `true` to restore the

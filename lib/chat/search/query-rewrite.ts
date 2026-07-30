@@ -94,8 +94,8 @@ const COLOUR_TERMS = new Set([
 const CORE_PRODUCT_PHRASES: { kind: string; re: RegExp; label: string }[] = [
   {
     kind: "glove",
-    re: /\b(?:boxing\s+|mma\s+|sparring\s+|training\s+|bag\s+)?gloves?\b/i,
-    label: "boxing gloves",
+    re: /\b(?:\w+\s+)?gloves?\b/i,
+    label: "gloves",
   },
   {
     kind: "mitt",
@@ -104,21 +104,23 @@ const CORE_PRODUCT_PHRASES: { kind: string; re: RegExp; label: string }[] = [
   },
   {
     kind: "shoe",
-    re: /\b(?:boxing\s+)?shoes?\b/i,
-    label: "boxing shoes",
+    re: /\b(?:\w+\s+)?shoes?\b/i,
+    label: "shoes",
   },
   {
     kind: "boot",
-    re: /\b(?:boxing\s+)?boots?\b/i,
+    re: /\b(?:\w+\s+)?boots?\b/i,
     label: "boots",
   },
   {
     kind: "vest",
-    re: /\b(?:sauna\s+|sweat\s+)?vests?\b/i,
+    re: /\b(?:\w+\s+)?vests?\b/i,
     label: "vests",
   },
   { kind: "short", re: /\bshorts?\b/i, label: "shorts" },
   { kind: "robe", re: /\brobes?\b/i, label: "robes" },
+  { kind: "mat", re: /\b(?:\w+\s+)?mats?\b/i, label: "mats" },
+  { kind: "strap", re: /\b(?:\w+\s+)?straps?\b/i, label: "straps" },
 ];
 
 /** Add-ons that must not steal ranking from the primary product in kit queries. */
@@ -206,7 +208,7 @@ export function focusPrimaryProductQuery(query: string): string {
 
   if (focused.length < 8) {
     const core = CORE_PRODUCT_PHRASES.find((p) => p.kind === primary.kind);
-    return normalizeSemanticQuery(core?.label ?? "boxing gloves");
+    return normalizeSemanticQuery(core?.label ?? "gloves");
   }
 
   return normalizeSemanticQuery(focused);
@@ -442,16 +444,17 @@ export function buildFallbackQueries(query: string): string[] {
       kind === "guard" && guardMod ? `${model} ${guardMod} guards` : `${model} ${kind}`,
     );
   } else if (kind) {
-    // Prefer "boxing gloves" style when boxing + glove present
-    if (terms.includes("boxing") && kind === "glove") {
-      push("boxing gloves");
-    } else if (terms.includes("mma") && kind === "glove") {
-      push("mma gloves");
-    } else if (terms.includes("sparring") && kind === "glove") {
-      push("sparring gloves");
-    } else if (kind === "guard" && guardMod) {
-      // Never broaden "shin guards" → bare "guard" (pulls head/groin/mouth).
+    // Keep distinctive modifiers when present; never invent a default sport.
+    const sportMod = terms.find(
+      (t) =>
+        t !== kind &&
+        t.length > 2 &&
+        !["guard", "glove", "bag", "mat"].includes(t),
+    );
+    if (kind === "guard" && guardMod) {
       push(`${guardMod} guards`);
+    } else if (sportMod && kind === "glove") {
+      push(`${sportMod} gloves`);
     } else {
       push(kind === "glove" ? "gloves" : kind);
     }

@@ -23,7 +23,7 @@ const ALL_TOOLS: ChatCompletionTool[] = [
           query: {
             type: "string",
             description:
-              'Semantic query, e.g. "boxing sparring gloves", "best sellers", "new arrivals", "products on sale", "beginner boxing gloves", "gifts", "something similar to t15", "leather boxing gloves under £60". Merge refinements with prior search from context.',
+              'Semantic query from the customer intent, e.g. "sparring gloves", "best sellers", "new arrivals", "products on sale", "beginner gloves", "gifts", "something similar to t15", "leather gloves under £60". Merge refinements with prior search from context.',
           },
           limit: {
             type: "number",

@@ -24,6 +24,9 @@ interface SseEvent {
   text?: string;
   reply?: string;
   error?: string;
+  sessionId?: string;
+  isNew?: boolean;
+  resumedFromMongo?: boolean;
   attachments?: unknown;
 }
 
@@ -39,12 +42,33 @@ export interface StreamChatHandlers {
     content: string,
     meta?: { attachments?: ChatAttachment[] },
   ) => void;
+  /** Called when the server reports the authoritative session id. */
+  onSessionMeta?: (meta: {
+    sessionId: string;
+    isNew: boolean;
+    resumedFromMongo?: boolean;
+  }) => void;
+}
+
+function emitSessionMeta(
+  handlers: StreamChatHandlers,
+  sessionId: unknown,
+  isNew: unknown,
+  resumedFromMongo?: unknown,
+): void {
+  if (typeof sessionId !== "string" || !sessionId.trim()) return;
+  handlers.onSessionMeta?.({
+    sessionId: sessionId.trim(),
+    isNew: isNew === true,
+    resumedFromMongo: resumedFromMongo === true,
+  });
 }
 
 export async function streamChatReply(
   { message, newSession, signal }: StreamChatParams,
-  { onAssistantContent }: StreamChatHandlers,
+  handlers: StreamChatHandlers,
 ): Promise<void> {
+  const { onAssistantContent } = handlers;
   const res = await fetch("/api/chat?stream=1", {
     method: "POST",
     headers: {
@@ -69,8 +93,17 @@ export async function streamChatReply(
     const data = (await res.json().catch(() => null)) as {
       reply?: string;
       error?: string;
+      sessionId?: string;
+      isNew?: boolean;
+      resumedFromMongo?: boolean;
       attachments?: unknown;
     } | null;
+    emitSessionMeta(
+      handlers,
+      data?.sessionId,
+      data?.isNew,
+      data?.resumedFromMongo,
+    );
     const attachments = sanitizeChatAttachments(data?.attachments);
     onAssistantContent(
       polishCustomerReply(data?.reply || data?.error || NO_REPLY_FALLBACK),
@@ -101,6 +134,12 @@ export async function streamChatReply(
           onAssistantContent(stripAssistantMedia(assembled));
         } else if (event.type === "done" && event.reply) {
           assembled = event.reply;
+          emitSessionMeta(
+            handlers,
+            event.sessionId,
+            event.isNew,
+            event.resumedFromMongo,
+          );
           const attachments = sanitizeChatAttachments(event.attachments);
           onAssistantContent(
             polishCustomerReply(assembled),

@@ -33,6 +33,36 @@ describe("extractProductTerms / filterProductsByQueryRelevance", () => {
     ]);
   });
 
+  it("strips purchase-intent words from browse phrases", () => {
+    expect(extractProductTerms("i need to buy a shin guard")).toEqual([
+      "shin",
+      "guard",
+    ]);
+    expect(extractProductTerms("looking for boxing gloves")).toEqual([
+      "boxing",
+      "glove",
+    ]);
+    expect(extractProductTerms("yes I want head guards")).toEqual([
+      "head",
+      "guard",
+    ]);
+  });
+
+  it("matches shin guards when the ask uses purchase phrasing", () => {
+    const products = [
+      { title: "RDX Shin Guards for MMA" },
+      { title: "RDX T1 Black Head Guard" },
+      { title: "RDX Groin Guard" },
+    ];
+    const { products: matched, kind } = filterProductsByQueryRelevance(
+      products,
+      "i need to buy a shin guard",
+    );
+    expect(kind).toBe("guard");
+    expect(matched).toHaveLength(1);
+    expect(matched[0]?.title).toContain("Shin");
+  });
+
   it("keeps sweat vests and drops sauna suits/leggings", () => {
     const products = [
       { title: "RDX M1 Men Sweat Vest Without Zipper" },

@@ -11,6 +11,10 @@ export type ChatSseEvent =
       type: "done";
       reply: string;
       requestId: string;
+      /** Opaque server session id — client stores it to detect resume/desync. */
+      sessionId: string;
+      isNew: boolean;
+      resumedFromMongo?: boolean;
       attachments?: ChatAttachment[];
     }
   | { type: "error"; error: string };

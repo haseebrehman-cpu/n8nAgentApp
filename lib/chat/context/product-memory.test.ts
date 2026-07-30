@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildContextBlock,
   extractShownProducts,
+  normalizeShownProducts,
   MAX_SHOWN_PRODUCTS,
   type ShownProduct,
 } from "@/lib/chat/context/product-memory";
@@ -76,7 +77,7 @@ describe("extractShownProducts", () => {
       }),
     );
     expect(shown).toHaveLength(1);
-    expect(shown[0]).toMatchObject({ id: "1", title: "Glove", inStock: false });
+    expect(shown[0]).toMatchObject({ id: "1", title: "Glove", inStock: null });
   });
 
   it("drops entries missing id or title, and caps the list", () => {
@@ -94,6 +95,52 @@ describe("extractShownProducts", () => {
     expect(extractShownProducts(wrap("{}"))).toEqual([]);
     expect(extractShownProducts("not json")).toEqual([]);
     expect(extractShownProducts(wrap('{"products": []}'))).toEqual([]);
+  });
+});
+
+describe("normalizeShownProducts", () => {
+  it("keeps valid products and drops malformed entries", () => {
+    expect(
+      normalizeShownProducts([
+        {
+          id: "gid://1",
+          title: "F4",
+          price: "£10",
+          wasPrice: null,
+          url: null,
+          inStock: true,
+          onSale: false,
+        },
+        { id: "", title: "bad" },
+        null,
+        { id: "gid://2", title: "F6" },
+      ]),
+    ).toEqual([
+      {
+        id: "gid://1",
+        title: "F4",
+        price: "£10",
+        wasPrice: null,
+        url: null,
+        inStock: true,
+        onSale: false,
+      },
+      {
+        id: "gid://2",
+        title: "F6",
+        price: null,
+        wasPrice: null,
+        url: null,
+        inStock: null,
+        onSale: false,
+      },
+    ]);
+  });
+
+  it("returns null for empty or non-array input", () => {
+    expect(normalizeShownProducts(null)).toBeNull();
+    expect(normalizeShownProducts([])).toBeNull();
+    expect(normalizeShownProducts("x")).toBeNull();
   });
 });
 

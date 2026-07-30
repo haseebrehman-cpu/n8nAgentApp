@@ -6,19 +6,16 @@
  * - Soft-fails when REDIS_URL is unset (local/dev) so the app still boots
  * - Logs connect success / failure clearly (URL redacted — never logs password)
  *
- * TEMP: `isRedisEnabled()` currently returns false so sessions, rate limit,
- * and product caches use in-memory fallbacks. Flip that helper to re-enable.
+ * Sessions, rate limiting, and product caches require Redis in multi-instance
+ * production. When REDIS_URL is unset, callers use in-memory fallbacks.
  */
 
 import Redis from "ioredis";
 import { getRedisConfig } from "@/lib/config";
 
-/**
- * TEMP: return `true` to restore Redis for sessions, rate limit, and caches.
- * While false, all callers use in-memory fallbacks.
- */
+/** Redis is used whenever REDIS_URL is configured (see getRedis). */
 function isRedisEnabled(): boolean {
-  return false;
+  return true;
 }
 
 const globalForRedis = globalThis as unknown as {
@@ -199,8 +196,7 @@ export async function probeRedisStatus(): Promise<RedisStatusReport> {
   if (!isRedisEnabled()) {
     return {
       status: "skipped",
-      detail:
-        "Redis temporarily disabled — rate limit & product cache use in-memory only",
+      detail: "Redis disabled — sessions, rate limit & product cache use in-memory only",
     };
   }
 

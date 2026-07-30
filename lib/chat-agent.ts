@@ -542,9 +542,10 @@ export async function runChatAgent(
     if (capturedProducts && capturedProducts.length > 0) {
       setLastShownProducts(session, capturedProducts);
     }
+    // Keep pendingCategory as the topic/clarification label — do not overwrite
+    // it with the rewritten semantic search query (that lives in lastSearchQuery).
     if (capturedSearchQuery) {
       setLastSearchQuery(session, capturedSearchQuery);
-      setPendingCategory(session, capturedSearchQuery);
     }
     return finishWithReply(
       session,

@@ -76,14 +76,14 @@ function hintForMode(
     const scope = collectionLabel
       ? ` from the live storefront collection ${collectionLabel}`
       : "";
-    return `LIST MODE${scope}: Use the Full list response template (headings, bullets, Product Cards — no tables, no JSON, no field names). productCount is the category total (exact when countIsExactCategoryTotal is true; otherwise say "at least" that many). Show at most ${LIST_PAYLOAD_PRODUCTS} products. If truncated, say you are showing the first ${LIST_PAYLOAD_PRODUCTS} only. Never invent products or stock.${confidenceNote}`;
+    return `LIST MODE${scope}: Use the Full list response template (headings, bullets, Product Cards — no tables, no JSON, no field names). Do NOT tell the customer how many products there are (no "we have X products" / totals) unless they explicitly asked "how many". Show at most ${LIST_PAYLOAD_PRODUCTS} products. If truncated, say you are showing a first set only — without stating the total. Never invent products or stock.${confidenceNote}`;
   }
 
   if (mode === "category") {
     const scope = collectionLabel
       ? ` from the live storefront collection ${collectionLabel}`
       : "";
-    return `CATEGORY MODE${scope}: Use the Category listing response template (headings, bullets, Product Cards — no tables, no JSON, no field names). State the total from productCount (exact when countIsExactCategoryTotal is true). Show up to ${CATEGORY_PAYLOAD_PRODUCTS} products, then invite narrowing by model, size, weight, material, or use. Never invent products or stock.${confidenceNote}`;
+    return `CATEGORY MODE${scope}: Use the Category listing response template (headings, bullets, Product Cards — no tables, no JSON, no field names). Do NOT mention category totals or "X products available" unless the customer explicitly asked "how many". Show up to ${CATEGORY_PAYLOAD_PRODUCTS} products, then invite narrowing by model, size, weight, material, or use. Never invent products or stock.${confidenceNote}`;
   }
 
   if (mode === "specific") {

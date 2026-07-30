@@ -15,8 +15,11 @@ import {
 } from "react";
 import {
   clearStoredMessages,
+  clearStoredSessionId,
   loadStoredMessages,
+  loadStoredSessionId,
   saveStoredMessages,
+  saveStoredSessionId,
 } from "@/components/chat/chatStorage";
 import type { ChatMessage } from "@/components/chat/types";
 
@@ -28,6 +31,8 @@ export interface ChatHistory {
   startNewSessionRef: MutableRefObject<boolean>;
   /** Replace the transcript and clear persisted history (used by "New chat"). */
   resetMessages: (initial: ChatMessage[]) => void;
+  /** Persist the server session id returned by /api/chat. */
+  rememberSessionId: (sessionId: string) => void;
 }
 
 export function useChatHistory(): ChatHistory {
@@ -37,11 +42,14 @@ export function useChatHistory(): ChatHistory {
 
   useEffect(() => {
     const stored = loadStoredMessages();
+    const storedSessionId = loadStoredSessionId();
     startTransition(() => {
       if (stored.length > 0) {
         setMessages(stored);
-        // Only resume the cookie session if this tab already had a real conversation.
-        startNewSessionRef.current = !stored.some((m) => m.role === "user");
+        // Resume the cookie session only when this tab already had a real
+        // conversation AND we still know which server session owned it.
+        const hasUserTurn = stored.some((m) => m.role === "user");
+        startNewSessionRef.current = !(hasUserTurn && Boolean(storedSessionId));
       }
       setHydrated(true);
     });
@@ -56,7 +64,21 @@ export function useChatHistory(): ChatHistory {
     startNewSessionRef.current = true;
     setMessages(initial);
     clearStoredMessages();
+    clearStoredSessionId();
   }
 
-  return { messages, setMessages, hydrated, startNewSessionRef, resetMessages };
+  function rememberSessionId(sessionId: string) {
+    const trimmed = sessionId.trim();
+    if (!trimmed) return;
+    saveStoredSessionId(trimmed);
+  }
+
+  return {
+    messages,
+    setMessages,
+    hydrated,
+    startNewSessionRef,
+    resetMessages,
+    rememberSessionId,
+  };
 }

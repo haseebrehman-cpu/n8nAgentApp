@@ -42,7 +42,10 @@ export function useChatStream(): ChatStream {
       setIsTyping(true);
 
       try {
-        await streamChatReply({ message, newSession, signal: ac.signal }, handlers);
+        await streamChatReply(
+          { message, newSession, signal: ac.signal },
+          handlers,
+        );
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         handlers.onAssistantContent(UNREACHABLE_REPLY);

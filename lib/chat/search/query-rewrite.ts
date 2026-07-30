@@ -6,9 +6,24 @@
  * weight, budget) rather than collapsing to bare keywords.
  */
 
-import { normalizeSearchQuery } from "@/lib/chat/intent";
+import {
+  isCatalogCountQuery,
+  isExplicitCatalogListQuery,
+  normalizeSearchQuery,
+} from "@/lib/chat/intent";
 import { QUERY_TYPO_MAP } from "@/lib/chat/intent/patterns";
 import { matchTermsForQuery } from "@/lib/shopify/compact-catalog";
+
+/** Body-part modifiers that must stay with "guard" in fallback queries. */
+const GUARD_TYPE_FALLBACK_MODIFIERS = new Set([
+  "head",
+  "shin",
+  "groin",
+  "mouth",
+  "face",
+  "chest",
+  "body",
+]);
 
 /** Extra typos applied token-wise (beyond whole-phrase QUERY_TYPO_MAP). */
 const TOKEN_TYPO_MAP: Record<string, string> = {
@@ -346,6 +361,22 @@ export function rewriteSearchQuery(input: {
     };
   }
 
+  // Count / list / bare "yes" with no product nouns → reuse the prior category
+  // ("how many total available list all" after shin guards).
+  if (
+    prior &&
+    matchTermsForQuery(prior).length >= 1 &&
+    matchTermsForQuery(base).length === 0 &&
+    (isCatalogCountQuery(input.lastUser) ||
+      isExplicitCatalogListQuery(input.lastUser) ||
+      /^(yes|yeah|yep|yup|ok|okay|sure)\b/i.test(input.lastUser.trim()))
+  ) {
+    return {
+      query: focusPrimaryProductQuery(prior),
+      mergedFromContext: true,
+    };
+  }
+
   // "something similar to X" — keep full intent phrase for MCP semantics.
   if (/\bsimilar\b/i.test(input.lastUser) && userQ) {
     return {
@@ -405,8 +436,11 @@ export function buildFallbackQueries(query: string): string[] {
   const kind = terms.includes("glove")
     ? "glove"
     : terms[terms.length - 1];
+  const guardMod = terms.find((t) => GUARD_TYPE_FALLBACK_MODIFIERS.has(t));
   if (model && kind && model !== kind) {
-    push(`${model} ${kind}`);
+    push(
+      kind === "guard" && guardMod ? `${model} ${guardMod} guards` : `${model} ${kind}`,
+    );
   } else if (kind) {
     // Prefer "boxing gloves" style when boxing + glove present
     if (terms.includes("boxing") && kind === "glove") {
@@ -415,6 +449,9 @@ export function buildFallbackQueries(query: string): string[] {
       push("mma gloves");
     } else if (terms.includes("sparring") && kind === "glove") {
       push("sparring gloves");
+    } else if (kind === "guard" && guardMod) {
+      // Never broaden "shin guards" → bare "guard" (pulls head/groin/mouth).
+      push(`${guardMod} guards`);
     } else {
       push(kind === "glove" ? "gloves" : kind);
     }

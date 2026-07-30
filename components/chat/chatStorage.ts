@@ -3,7 +3,10 @@
  * sessionStorage access (and its failure modes) from the React components.
  */
 
-import { STORAGE_KEY } from "@/components/chat/constants";
+import {
+  SESSION_ID_STORAGE_KEY,
+  STORAGE_KEY,
+} from "@/components/chat/constants";
 import type { ChatMessage } from "@/components/chat/types";
 import { sanitizeChatAttachments } from "@/lib/chat/attachments";
 
@@ -65,6 +68,34 @@ export function saveStoredMessages(messages: ChatMessage[]): void {
 export function clearStoredMessages(): void {
   try {
     window.sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** Opaque server session id paired with the UI transcript. */
+export function loadStoredSessionId(): string | null {
+  try {
+    const value = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
+    return value && value.trim() ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredSessionId(sessionId: string): void {
+  try {
+    const trimmed = sessionId.trim();
+    if (!trimmed) return;
+    window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, trimmed);
+  } catch {
+    // ignore
+  }
+}
+
+export function clearStoredSessionId(): void {
+  try {
+    window.sessionStorage.removeItem(SESSION_ID_STORAGE_KEY);
   } catch {
     // ignore
   }

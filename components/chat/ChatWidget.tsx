@@ -33,8 +33,13 @@ function welcomeMessage(): ChatMessage {
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState("");
-  const { messages, setMessages, startNewSessionRef, resetMessages } =
-    useChatHistory();
+  const {
+    messages,
+    setMessages,
+    startNewSessionRef,
+    resetMessages,
+    rememberSessionId,
+  } = useChatHistory();
   const { isTyping, send, stop } = useChatStream();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -184,7 +189,12 @@ export default function ChatWidget() {
 
     await send(
       { message: trimmed, newSession },
-      { onAssistantContent: upsertAssistant },
+      {
+        onAssistantContent: upsertAssistant,
+        onSessionMeta: ({ sessionId }) => {
+          rememberSessionId(sessionId);
+        },
+      },
     );
   }
 

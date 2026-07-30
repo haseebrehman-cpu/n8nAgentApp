@@ -13,6 +13,8 @@ describe("sse helpers", () => {
       type: "done",
       reply: "chart below",
       requestId: "r1",
+      sessionId: "sess-1",
+      isNew: false,
       attachments: [
         {
           kind: "size_chart",

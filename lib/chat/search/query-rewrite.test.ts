@@ -57,6 +57,38 @@ describe("buildFallbackQueries", () => {
     expect(variants.length).toBeGreaterThan(0);
     expect(variants.some((v) => !/£|40/.test(v))).toBe(true);
   });
+
+  it("keeps shin/head modifiers instead of bare guard", () => {
+    const shin = buildFallbackQueries("i need to buy a shin guard");
+    expect(shin.some((v) => /\bshin\b/i.test(v))).toBe(true);
+    expect(shin.every((v) => v.toLowerCase() !== "guard")).toBe(true);
+
+    const head = buildFallbackQueries("black head guards");
+    expect(head.some((v) => /\bhead\b/i.test(v))).toBe(true);
+    expect(head.every((v) => v.toLowerCase() !== "guard")).toBe(true);
+  });
+});
+
+describe("rewriteSearchQuery count/affirmation follow-ups", () => {
+  it("reuses prior category for how-many / list-all with no product nouns", () => {
+    const { query, mergedFromContext } = rewriteSearchQuery({
+      toolQuery: "how many total available list all",
+      lastUser: "how many total available list all",
+      lastSearchQuery: "i need to buy a shin guard",
+    });
+    expect(mergedFromContext).toBe(true);
+    expect(query.toLowerCase()).toMatch(/shin/);
+  });
+
+  it("reuses prior category on bare yes", () => {
+    const { query, mergedFromContext } = rewriteSearchQuery({
+      toolQuery: "yes",
+      lastUser: "yes",
+      lastSearchQuery: "shin guards",
+    });
+    expect(mergedFromContext).toBe(true);
+    expect(query.toLowerCase()).toMatch(/shin/);
+  });
 });
 
 describe("focusPrimaryProductQuery / kit asks", () => {

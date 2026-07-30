@@ -22,16 +22,23 @@ vi.stubGlobal("window", {
 
 import {
   clearStoredMessages,
+  clearStoredSessionId,
   loadStoredMessages,
+  loadStoredSessionId,
   saveStoredMessages,
+  saveStoredSessionId,
 } from "@/components/chat/chatStorage";
-import { STORAGE_KEY } from "@/components/chat/constants";
+import {
+  SESSION_ID_STORAGE_KEY,
+  STORAGE_KEY,
+} from "@/components/chat/constants";
 
 describe("chatStorage attachments", () => {
   const prevHost = process.env.NEXT_PUBLIC_STOREFRONT_HOST;
 
   afterEach(() => {
     clearStoredMessages();
+    clearStoredSessionId();
     if (prevHost === undefined) delete process.env.NEXT_PUBLIC_STOREFRONT_HOST;
     else process.env.NEXT_PUBLIC_STOREFRONT_HOST = prevHost;
   });
@@ -89,5 +96,16 @@ describe("chatStorage attachments", () => {
 
     const loaded = loadStoredMessages();
     expect(loaded[0]?.attachments).toBeUndefined();
+  });
+
+  it("round-trips the server session id", () => {
+    expect(loadStoredSessionId()).toBeNull();
+    saveStoredSessionId("sess-abc");
+    expect(loadStoredSessionId()).toBe("sess-abc");
+    expect(window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY)).toBe(
+      "sess-abc",
+    );
+    clearStoredSessionId();
+    expect(loadStoredSessionId()).toBeNull();
   });
 });

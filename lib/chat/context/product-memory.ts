@@ -55,6 +55,19 @@ function toShownProduct(raw: CatalogProductShape): ShownProduct | null {
   };
 }
 
+/** Sanitize persisted / wire product memory (Redis, Mongo, or API). */
+export function normalizeShownProducts(raw: unknown): ShownProduct[] | null {
+  if (!Array.isArray(raw)) return null;
+  const shown: ShownProduct[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const product = toShownProduct(item as CatalogProductShape);
+    if (product) shown.push(product);
+    if (shown.length >= MAX_SHOWN_PRODUCTS) break;
+  }
+  return shown.length > 0 ? shown : null;
+}
+
 /**
  * Pull the products a catalog tool result surfaced to the customer. Accepts a
  * wrapped tool result (CATALOG_DATA + hint) or the raw compacted JSON. Handles

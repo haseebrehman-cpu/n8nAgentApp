@@ -110,7 +110,7 @@ export const TEMPLATE_CATEGORY_LISTING = `
 ### Template: Category listing
 
 Introduction
-{We have **X** products in **{category}**. Show a sample below.}
+{1 short sentence confirming the category — do NOT mention totals or "X products available". Only if they explicitly asked "how many", answer with the count from productCount.}
 
 ### Popular picks
 
@@ -126,7 +126,7 @@ export const TEMPLATE_FULL_LIST = `
 ### Template: Full list
 
 Introduction
-{Total from productCount. If truncated, say you are showing the first N only.}
+{1 short sentence that you are listing options — do NOT mention totals or "X products available". If truncated, say you are showing a first set only (no numbers unless they asked "how many").}
 
 ### Products
 

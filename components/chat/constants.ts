@@ -4,6 +4,8 @@ import type { ChatOption } from "@/components/chat/types";
 
 export const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Our Store";
 export const STORAGE_KEY = "chat-widget-history-v2";
+/** Tracks the server session id that owns the UI transcript. */
+export const SESSION_ID_STORAGE_KEY = "chat-widget-session-id-v1";
 export const MAX_INPUT_CHARS = 2000;
 
 export const WELCOME_MESSAGE = `Welcome to **${STORE_NAME}**. I'm your shopping assistant.\n\nHow can I help you today? Choose an option below, or type your question.`;

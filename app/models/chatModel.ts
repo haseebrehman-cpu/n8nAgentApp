@@ -99,7 +99,8 @@ const chatSchema = new mongoose.Schema(
       default: 0,
     },
   },
-  { timestamps: true },
+  // Always persist under Cluster0 → main → chats (see lib/mongo.ts dbName).
+  { timestamps: true, collection: "chats" },
 );
 
 const Chat = mongoose.models.Chat || mongoose.model("Chat", chatSchema);

@@ -23,10 +23,11 @@ async function dbConnect() {
   if (cached.conn) return cached.conn;
 
   if (!cached.promise) {
+    // Cluster0 → database `main` only. Chat docs live in the `chats` collection.
+    const dbName = process.env.MONGO_DB_NAME || "main";
     cached.promise = mongoose.connect(MONGODB_URL, {
       bufferCommands: false,
-      // Prefer explicit db so Atlas does not fall back to the default `test` database.
-      dbName: process.env.MONGO_DB_NAME || "main",
+      dbName,
     });
   }
 

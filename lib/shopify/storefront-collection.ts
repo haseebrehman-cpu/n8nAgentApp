@@ -232,7 +232,10 @@ function collectionFitsParentAggregation(
   const q = query.toLowerCase();
 
   // Promo / seasonal collections inflate or skew category totals.
-  if (isMarketingCollection(title, handle) && !queryRequestsMarketingCollection(query)) {
+  if (
+    isMarketingCollection(title, handle) &&
+    !queryRequestsMarketingCollection(query)
+  ) {
     return false;
   }
 
@@ -531,7 +534,7 @@ export async function fetchStorefrontCollectionProducts(
             ? node.url
             : `${origin}${node.url}`
           : pathHandle
-            ? `${origin}/products/${pathHandle}` ?? `${origin}/${pathHandle}`
+            ? `${origin}/products/${pathHandle}`
             : undefined;
 
       products.push({

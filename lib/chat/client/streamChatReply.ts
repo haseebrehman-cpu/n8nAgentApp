@@ -116,6 +116,7 @@ export async function streamChatReply(
   const decoder = new TextDecoder();
   let buffer = "";
   let assembled = "";
+  let sawTerminalEvent = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -133,6 +134,7 @@ export async function streamChatReply(
           assembled += event.text;
           onAssistantContent(stripAssistantMedia(assembled));
         } else if (event.type === "done" && event.reply) {
+          sawTerminalEvent = true;
           assembled = event.reply;
           emitSessionMeta(
             handlers,
@@ -146,7 +148,10 @@ export async function streamChatReply(
             attachments.length ? { attachments } : undefined,
           );
         } else if (event.type === "error") {
-          onAssistantContent(event.error ?? STREAM_ERROR);
+          // Keep the server error — do not overwrite with the empty-reply fallback.
+          sawTerminalEvent = true;
+          assembled = (event.error ?? STREAM_ERROR).trim();
+          onAssistantContent(assembled || STREAM_ERROR);
         }
       } catch {
         // ignore malformed SSE chunks
@@ -154,7 +159,7 @@ export async function streamChatReply(
     }
   }
 
-  if (!assembled.trim()) {
+  if (!assembled.trim() && !sawTerminalEvent) {
     onAssistantContent(NO_REPLY_FALLBACK);
   }
 }

@@ -98,7 +98,10 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-function extractSummary(description: RawProduct["description"]): string | null {
+function extractSummary(
+  description: RawProduct["description"],
+  maxChars = MAX_DESCRIPTION_CHARS,
+): string | null {
   if (!description) return null;
   let raw = "";
   if (typeof description === "string") {
@@ -110,8 +113,8 @@ function extractSummary(description: RawProduct["description"]): string | null {
   }
   const plain = stripHtml(raw);
   if (!plain) return null;
-  if (plain.length <= MAX_DESCRIPTION_CHARS) return plain;
-  return `${plain.slice(0, MAX_DESCRIPTION_CHARS).trim()}…`;
+  if (maxChars <= 0 || plain.length <= maxChars) return plain;
+  return `${plain.slice(0, maxChars).trim()}…`;
 }
 
 function moneyToNumber(m?: Money): number | null {
@@ -191,7 +194,10 @@ export function isActiveCatalogProduct(raw: RawProduct): boolean {
   return true;
 }
 
-export function compactProduct(raw: RawProduct): CompactProduct | null {
+export function compactProduct(
+  raw: RawProduct,
+  opts: { fullDescription?: boolean } = {},
+): CompactProduct | null {
   if (!isActiveCatalogProduct(raw)) return null;
 
   const id = String(raw.id ?? "").trim();
@@ -271,7 +277,7 @@ export function compactProduct(raw: RawProduct): CompactProduct | null {
     wasPrice,
     onSale: Boolean(wasPrice),
     inStock,
-    summary: extractSummary(raw.description),
+    summary: extractSummary(raw.description, opts.fullDescription ? 0 : MAX_DESCRIPTION_CHARS),
     ...(rawOptions.length ? { productOptions: rawOptions } : {}),
     variants,
     options: variants,
@@ -887,6 +893,13 @@ export interface CompactCatalogOptions {
   fallbackApplied?: boolean;
   /** True when results were filtered from session lastShownProducts. */
   reusedContext?: boolean;
+  /**
+   * When true, include the full product description without the
+   * MAX_DESCRIPTION_CHARS truncation. Use for single-product detail fetches
+   * (get_product / lookup_catalog by id) so the model can read specs like
+   * fill level, material, weight etc. from the description.
+   */
+  fullDescription?: boolean;
 }
 
 /** Iconic Range / Iconic Gear promo line — omit unless the customer asks. */
@@ -935,7 +948,7 @@ export function compactCatalogMcpText(
   if (Array.isArray(obj.products)) {
     let products = (obj.products as RawProduct[])
       .filter(isActiveCatalogProduct)
-      .map(compactProduct)
+      .map((p) => compactProduct(p, { fullDescription: options.fullDescription }))
       .filter((p): p is CompactProduct => Boolean(p));
 
     products = dedupeProductsById(products);
@@ -1045,7 +1058,7 @@ export function compactCatalogMcpText(
 
   // get_product shape
   if (obj.product && typeof obj.product === "object") {
-    const product = compactProduct(obj.product as RawProduct);
+    const product = compactProduct(obj.product as RawProduct, { fullDescription: options.fullDescription });
     if (!product) return JSON.stringify({ product: null });
     return JSON.stringify({ product });
   }

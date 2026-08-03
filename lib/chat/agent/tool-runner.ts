@@ -173,8 +173,8 @@ export async function runTool(
       try {
         const data = await getProduct({ id }, { signal: options.signal });
         return wrapMcpResult(
-          compactCatalogMcpText(data),
-          "Full details for this product (compacted). Use ONLY these facts (price, options/availability, link). A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. Never invent details. If inStock is null, do not claim stock — call get_product variants or get_inventory.",
+          compactCatalogMcpText(data, { fullDescription: true }),
+          "Full details for this product (compacted). Use ONLY these facts. A product is in stock when inStock is true or any option has available:true. For exact unit quantities, call get_inventory. IMPORTANT: The 'summary' field contains the product description — ALWAYS check it first before saying any specification, feature, or attribute is unavailable. If the customer asks about weight, fill level, material, pre-filled status, dimensions, or any other product attribute, look for that information in the summary field before saying it is not available. Never invent details not present in the data.",
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -318,8 +318,8 @@ export async function runTool(
 
       const data = await lookupCatalog({ ids }, { signal: options.signal });
       return wrapMcpResult(
-        compactCatalogMcpText(data),
-        "Products/variants resolved by id (compacted). Use ONLY these facts. Never invent details.",
+        compactCatalogMcpText(data, { fullDescription: true }),
+        "Products/variants resolved by id (compacted). Use ONLY these facts. IMPORTANT: The 'summary' field contains the product description — ALWAYS check it first before saying any specification, feature, or attribute is unavailable. If the customer asks about weight, fill level, material, pre-filled status, dimensions, or any other product attribute, look for that information in the summary field. Never invent details not present in the data.",
       );
     }
 

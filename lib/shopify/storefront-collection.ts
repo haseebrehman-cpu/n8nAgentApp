@@ -531,7 +531,7 @@ export async function fetchStorefrontCollectionProducts(
             ? node.url
             : `${origin}${node.url}`
           : pathHandle
-            ? `${origin}/products/${pathHandle}`
+            ? `${origin}/products/${pathHandle}` ?? `${origin}/${pathHandle}`
             : undefined;
 
       products.push({

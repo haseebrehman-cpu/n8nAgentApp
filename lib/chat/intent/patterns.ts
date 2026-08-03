@@ -40,10 +40,28 @@ export const QUERY_TYPO_MAP: Record<string, string> = {
 };
 
 /**
- * Product series / model codes (letter + digits). Requires a letter before
- * digits so bare sizes like "14oz" are not treated as named models.
+ * Product series / model codes:
+ * - letter-leading: F6, T15, F4R
+ * - digit-leading with letters: 2W, 3G
+ * Bare sizes ("14oz") and order-like numbers ("1001") are excluded — strip
+ * oz-weights before testing, and require at least one letter in the token.
  */
-export const PRODUCT_MODEL_CODE_RE = /\b[a-z]{1,3}\d{1,4}[a-z]{0,2}\b/i;
+export const PRODUCT_MODEL_CODE_RE =
+  /\b(?:[a-z]{1,3}\d{1,4}[a-z]{0,3}|\d{1,3}[a-z]{1,3})\b/i;
+
+/**
+ * Common storefront product nouns. Used by browse / purchase classifiers so
+ * natural language like "punching ball" is treated as shopping intent.
+ */
+export const PRODUCT_NOUN_RE =
+  /\b(?:gloves?|bags?|guards?|headgears?|mats?|straps?|wraps?|shoes|boots|shorts?|belts?|pads?|blocks?|vests?|kits?|gear|accessories|balls?|punching\s+balls?|speed\s+balls?|mitts?|mouthguards?|helmets?|dumbbells?|kettlebells?|benches?|racks?)\b/i;
+
+/**
+ * Natural-language purchase / product-interest phrasing used by professional
+ * retail chatbots ("I want to buy…", "looking to get…", "interested in…").
+ */
+export const PURCHASE_INTENT_RE =
+  /\b(?:(?:i\s+|we\s+|i'?d\s+|we'?d\s+)?(?:want|wanna|would\s+like|like)|looking|hoping|planning|need|trying)\s+to\s+(?:buy|purchase|get|order|grab|pick\s+up)\b|\b(?:i\s+|we\s+)?(?:want|wanna|need|like)\s+(?:the|a|an|this|that|these|those|some)\b|\b(?:buy|purchase|add\s+to\s+(?:(?:my|the)\s+)?cart|check\s+out)\b|\binterested\s+in\b|\bcan\s+i\s+(?:buy|get|order|purchase)\b/i;
 
 /**
  * @deprecated Category discovery is dynamic. Kept as empty for backward

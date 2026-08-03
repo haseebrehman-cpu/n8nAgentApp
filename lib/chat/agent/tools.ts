@@ -50,7 +50,7 @@ const ALL_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "get_product",
       description:
-        "Get full details for ONE specific product using its product id from a prior search_catalog, lookup_catalog, or CONVERSATION CONTEXT result. NEVER invent or guess ids — if you do not have a real id yet, call search_catalog first (especially for named comparisons like F4 vs F6). ALWAYS call get_product when the customer asks about available sizes, colours, weights, variants, options, or detailed specifications for a specific product. Do NOT guess or rely on search_catalog's sample variant. For exact unit quantities, prefer get_inventory. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
+        "Get full details for ONE specific product using its product id from a prior search_catalog, lookup_catalog, or CONVERSATION CONTEXT result. NEVER invent or guess ids — if you do not have a real id yet, call search_catalog first (especially for named comparisons like F4 vs F6). ALWAYS call get_product when the customer asks about available sizes, colours, weights, variants, options, or detailed specifications for a specific product. The result includes a 'summary' field from the product description — ALWAYS check this for specifications (weight, fill level, material, pre-filled status, dimensions, features) before saying any attribute is unavailable. Do NOT guess or rely on search_catalog's sample variant. For exact unit quantities, prefer get_inventory. For an explicit size-chart / size-guide image request, prefer get_size_chart instead.",
       parameters: {
         type: "object",
         properties: {

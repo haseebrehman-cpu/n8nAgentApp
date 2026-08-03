@@ -11,6 +11,8 @@ export {
   BROAD_TOPIC_PHRASES,
   CATEGORY_BROWSE_PHRASES,
   PRODUCT_MODEL_CODE_RE,
+  PRODUCT_NOUN_RE,
+  PURCHASE_INTENT_RE,
 } from "@/lib/chat/intent/patterns";
 
 export {
@@ -44,6 +46,7 @@ export {
   needsProductClarification,
   isAmbiguousBrowseQuery,
   hasNamedProductModel,
+  isPurchaseOrProductInterest,
   isProductFollowUpQuery,
   hasRecentProductContext,
   isOffTopicQuery,

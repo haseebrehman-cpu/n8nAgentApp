@@ -9,6 +9,8 @@ import { isValidEmailInput } from "@/lib/chatbot/orderTracking";
 import type { ChatMessagePayload } from "@/lib/types";
 import {
   PRODUCT_MODEL_CODE_RE,
+  PRODUCT_NOUN_RE,
+  PURCHASE_INTENT_RE,
   QUERY_TYPO_MAP,
 } from "@/lib/chat/intent/patterns";
 import { isDiscountCodeQuery, isDiscountQuery } from "@/lib/chat/intent/discount";
@@ -67,9 +69,9 @@ export function extractModelCodeFromQuery(
 ): { modelCode: string; categoryQuery: string } | null {
   // Strip weight sizes first so "14oz" is never treated as a model code.
   const withoutSizes = query.replace(/\b\d{1,2}\s*oz\b/gi, " ").trim();
-  const match = withoutSizes.match(/\b([a-z]{1,3}\d{1,4}[a-z]{0,2})\b/i);
+  const match = withoutSizes.match(PRODUCT_MODEL_CODE_RE);
   if (!match) return null;
-  const modelCode = match[1]!;
+  const modelCode = match[0]!;
   // Remove the model code token from the original query.
   const categoryQuery = query
     .replace(new RegExp(`\\b${modelCode}\\b`, "i"), "")
@@ -277,12 +279,10 @@ export function needsProductClarification(text: string): boolean {
 
   // Already narrowed: use-case + product type → search.
   if (
-    /\b(training|sparring|competition|bag|kids?|workout|lifting|beginner|professional)\b/i.test(
+    /\b(training|sparring|competition|bag|kids?|workout|lifting|beginner|professional|speed)\b/i.test(
       key,
     ) &&
-    /\b(gloves?|bags?|guards?|headgears?|shorts?|shoes|boots|pads?|wraps?|mats?|straps?)\b/i.test(
-      key,
-    )
+    PRODUCT_NOUN_RE.test(key)
   ) {
     return false;
   }
@@ -312,17 +312,43 @@ export function isAmbiguousBrowseQuery(text: string): boolean {
   if (isOrderTrackingIntent(key) || isOffTopicQuery(key)) return false;
   // Use-case + product type is specific enough — handled by force-search signals.
   if (
-    /\b(training|sparring|competition|bag|kids?|workout|lifting)\b/i.test(key) &&
-    /\b(gloves?|bags?|guards?|shorts?|shoes|boots|mats?|straps?)\b/i.test(key)
+    /\b(training|sparring|competition|bag|kids?|workout|lifting|speed)\b/i.test(
+      key,
+    ) &&
+    PRODUCT_NOUN_RE.test(key)
   ) {
     return false;
   }
   // Multi-word with a product noun → browse/search candidate.
   const words = key.split(/\s+/).filter(Boolean);
   if (words.length < 2) return false;
-  return /\b(gloves?|bags?|guards?|mats?|straps?|wraps?|shoes|boots|shorts?|belts?|pads?|blocks?|vests?|kits?|gear|accessories)\b/i.test(
-    key,
-  );
+  return PRODUCT_NOUN_RE.test(key);
+}
+
+/**
+ * True when the customer expresses purchase / product interest in natural
+ * language ("I want to buy…", "interested in…", brand + model + product noun).
+ * Professional retail bots treat these as catalog turns, not clarification.
+ */
+export function isPurchaseOrProductInterest(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  if (isHarmfulQuery(t) || isOrderTrackingIntent(t) || isOffTopicQuery(t)) {
+    return false;
+  }
+  if (isDiscountCodeQuery(t)) return false;
+
+  if (PURCHASE_INTENT_RE.test(t)) return true;
+
+  // Brand + product noun / model code ("RDX 2W SPEED PUNCHING BALL").
+  if (/\brdx\b/i.test(t) && (PRODUCT_NOUN_RE.test(t) || hasNamedProductModel(t))) {
+    return true;
+  }
+
+  // Named model + product noun without explicit "buy".
+  if (hasNamedProductModel(t) && PRODUCT_NOUN_RE.test(t)) return true;
+
+  return false;
 }
 
 /**
@@ -368,7 +394,7 @@ export function isProductFollowUpQuery(text: string): boolean {
 
   // 3. Superlative & attribute query terms (price, discount, size, weight, stock, ratings)
   if (
-    /\b(cheapest|cheaper|lowest\s+price|highest\s+price|most\s+expensive|best\s+value|lowest|highest|most\s+discount|biggest\s+discount|best\s+discount|on\s+sale|discounted|discounts?|marked\s+down|reduced|savings|lightest|heaviest|show\s+cheaper|more\s+affordable|less\s+expensive)\b/i.test(
+    /\b(cheapest|cheaper|lowest\s+price|highest\s+price|most\s+expensive|best\s+value|lowest|highest|most\s+discount|biggest\s+discount|best\s+discount|on\s+sale|discounted|discounts?|marked\_down|reduced|savings|lightest|heaviest|heavier|lighter|show\s+cheaper|more\s+affordable|less\s+expensive)\b/i.test(
       t,
     )
   ) {
@@ -386,15 +412,24 @@ export function isProductFollowUpQuery(text: string): boolean {
 
   // 5. Pronoun / attribute follow-ups tied to prior product context
   if (
-    /\b(them|these|those|it|that|this|ones?)\b/i.test(t) &&
-    /\b(oz|ounce|size|weight|material|use|purpose|colour|color|stock|price|cheaper|cheapest|expensive|heavier|lighter|options?|available|lowest|highest|discount|discounted|discounts|sale|savings|kids?|adults?|sparring|training|competition|leather|synthetic|vegan|clean|care|warranty|rating|review|certified|beginner|professional|pro)\b/i.test(
+    /\b(them|these|those|it|that|this|ones?|both|all)\b/i.test(t) &&
+    /\b(oz|ounce|size|weight|material|use|purpose|colour|color|stock|price|cheaper|cheapest|expensive|heavier|lighter|options?|available|lowest|highest|discount|discounted|discounts|sale|savings|kids?|adults?|sparring|training|competition|leather|synthetic|vegan|clean|care|warranty|rating|review|certified|beginner|professional|pro|pre.?filled|fill|filled|filling|sand|stuff|stuffing|capacity|specs?|specification|specifications|kg|lbs?)\b/i.test(
       t,
     )
   ) {
     return true;
   }
 
-  // 6. Returning to earlier products ("back to the f4", "the gloves from earlier")
+  // 6. Direct inquiry about context items ("tell me about these", "i need to know about weight of these both")
+  if (
+    /\b(tell\s+me\s+about|i\s+(?:need|want)\s+to\s+know(?:\s+about)?|what\s+(?:is|are)|details?\s+(?:on|about)|can\s+i\s+(?:make|fill|add))\b.*\b(these|those|them|both|this|that|it|bag)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  // 7. Returning to earlier products ("back to the f4", "the gloves from earlier")
   if (
     /\b(back\s+to|earlier|before|again|the\s+other\s+one|from\s+before|we\s+looked\s+at)\b/i.test(
       t,
@@ -472,9 +507,10 @@ export function isOffTopicQuery(text: string): boolean {
     /^(what(?:'s|\s+is)|who(?:'s|\s+is)|where(?:'s|\s+is)|when(?:'s|\s+is)|why(?:'s|\s+is)|how\s+(?:do|does|did|can|many|much)\b)/i.test(
       t,
     ) &&
-    !/\b(products?|items?|price|cost|size|stock|colour|color|order|shipping|delivery|discount|sale|buy|gloves?|vests?|suits?|guards?|mats?|wraps?|bags?|belts?|shin|sauna|sweat|kit|bundle|boxing|mma|store|available|difference|different|compare|versus|\bvs\b|better|which|policy|policies|return|refund|warranty|exchange|vegan|leather|clean|care|rating|review|certified|certification)\b/i.test(
+    !/\b(products?|items?|price|cost|size|stock|colour|color|order|shipping|delivery|discount|sale|buy|purchase|gloves?|vests?|suits?|guards?|mats?|wraps?|bags?|belts?|balls?|shin|sauna|sweat|kit|bundle|boxing|mma|store|available|difference|different|compare|versus|\bvs\b|better|which|policy|policies|return|refund|warranty|exchange|vegan|leather|clean|care|rating|review|certified|beginner|professional|pro|fill|filling|sand|weight|heavier|capacity|kg|lbs|specs?|material|stuff|rdx)\b/i.test(
       t,
-    )
+    ) &&
+    !PRODUCT_NOUN_RE.test(t)
   ) {
     return true;
   }
@@ -490,13 +526,18 @@ export function shouldForceProductSearch(text: string): boolean {
   if (isHarmfulQuery(t)) return false;
 
   // Broad "I need gloves/protection/equipment" → clarify first, don't force search.
-  if (needsProductClarification(t)) return false;
+  // Purchase phrasing with a specific product still forces search below.
+  const broadClarify = needsProductClarification(t);
+  if (broadClarify && !isPurchaseOrProductInterest(t)) return false;
 
   // Product follow-up questions (lowest price, cheapest, comparison) refer to existing context.
   if (isProductFollowUpQuery(t)) return false;
 
   // Clearer category browse (e.g. "boxing gloves", "head guards") → search now.
   if (isAmbiguousBrowseQuery(t)) return true;
+
+  // Natural purchase / named-product interest ("I want to buy the RDX 2W…").
+  if (isPurchaseOrProductInterest(t)) return true;
 
   if (isDiscountCodeQuery(t)) return false;
   if (isOrderTrackingIntent(t)) return false;
@@ -505,7 +546,7 @@ export function shouldForceProductSearch(text: string): boolean {
   if (isValidEmailInput(t)) return false;
 
   if (
-    /^(hi|hello|hey|good\s+(morning|afternoon|evening)|thanks|thank you|ok|okay|bye)\b/.test(
+    /^(hi|hello|hey|good\s+(morning|afternoon|evening)|thanks|thank you|ok|okay|bye|great|awesome|perfect|cool)\b/i.test(
       t,
     ) &&
     t.length < 40
@@ -520,7 +561,7 @@ export function shouldForceProductSearch(text: string): boolean {
     /\b(ship|shipping|delivery|hours?|opening|return|refund|damaged|place\s+(an\s+)?order|policy|policies|warranty|exchange|international)\b/.test(
       t,
     ) &&
-    !/\b(product|price|size|stock|colour|color|available|gloves|guard|kit|bundle)\b/.test(
+    !/\b(product|price|size|stock|colour|color|available|gloves|guard|kit|bundle|buy|purchase)\b/.test(
       t,
     )
   ) {
@@ -529,7 +570,7 @@ export function shouldForceProductSearch(text: string): boolean {
 
   // Explicit product / shopping signals.
   if (
-    /\b(price|cost|how much|in stock|available|size|colour|color|variant|buy|link|url|product|products|gloves|guard|shoes|kit|bundle|shin|boxing|mma|robe|looking\s+for|do\s+you\s+(?:have|sell)|show\s+me)\b/i.test(
+    /\b(price|cost|how much|in stock|available|size|colour|color|variant|buy|purchase|link|url|product|products|gloves|guard|shoes|kit|bundle|shin|boxing|mma|robe|ball|looking\s+for|do\s+you\s+(?:have|sell)|show\s+me)\b/i.test(
       t,
     )
   ) {
@@ -543,13 +584,13 @@ export function shouldForceProductSearch(text: string): boolean {
     return Boolean(rest);
   }
 
-  // Short catalog-style phrases ("robo kids punch") — not questions or commands.
+  // Short catalog-style phrases ("robo kids punch") — not questions, commands, or social pleasantries.
   const words = t.split(/\s+/).filter(Boolean);
   if (
     words.length >= 2 &&
     words.length <= 6 &&
     !/[?]/.test(t) &&
-    !/^(what|who|where|when|why|how|is|are|can|could|would|should|do|does|did|please|tell|track|check|order|help|i|we|my|me)\b/i.test(
+    !/^(what|who|where|when|why|how|is|are|can|could|would|should|do|does|did|please|tell|track|check|order|help|i|we|my|me|great|awesome|perfect|cool|ok|okay|thanks|thank)\b/i.test(
       t,
     )
   ) {

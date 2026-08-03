@@ -8,7 +8,7 @@ import type { ICatalogRepository } from "@/lib/chat/repositories/types";
 import type { ShownProduct } from "@/lib/chat/context/product-memory";
 
 export const CARE_INTENT_RE =
-  /\b((can|could|should|will|does|is|are)\s+.+\s+(get\s+wet|wash|clean|shrink|leave\s+(it\s+)?outside|use\s+(it\s+)?(outside|outdoors|daily|every\s+day)|waterproof|water[\s-]?resistant|rain|moisture|machine[\s-]?wash|hand[\s-]?wash|dry\s+clean|kids?\s+use|beginners?\s+use)|(how\s+do\s+i\s+(wash|clean|store|care\s+for)|care\s+instructions?|cleaning\s+instructions?|storage\s+advice))\b/i;
+  /\b((can|could|should|will|does|is|are)\s+.+\s+(get\s+wet|wash|clean|shrink|leave\s+(it\s+)?outside|use\s+(it\s+)?(outside|outdoors|daily|every\s+day)|waterproof|water[\s-]?resistant|rain|moisture|machine[\s-]?wash|hand[\s-]?wash|dry\s+clean|kids?\s+use|beginners?\s+use|fill\b|filling|stuff|stuffing|add\s+sand|use\s+sand|make\s+it\s+heavier|increase\s+weight)|(how\s+do\s+i\s+(wash|clean|store|care\s+for|fill|stuff)|care\s+instructions?|cleaning\s+instructions?|storage\s+advice|filling\s+advice))\b/i;
 
 export function isCareQuestion(text: string): boolean {
   return CARE_INTENT_RE.test(text.trim());
@@ -35,7 +35,7 @@ If official guidance is missing, answer like an experienced store associate:
 - Be warm and confident; never say only "I don't know" or "no information available".
 - Use: "I couldn't find any official guidance covering that specifically, but generally…"
 - Give practical industry best practices for the product type in context.
-- Prefer caution for outdoor exposure, washing methods, kids use, and durability.
+- Prefer caution for outdoor exposure, washing methods, kids use, durability, and custom filling/sand additions.
 - Keep to short paragraphs; avoid sounding like a search engine.
 `.trim();
 
@@ -49,7 +49,7 @@ export async function runCareSupport(
   const policyQuery = [
     input.message,
     focusProducts.length ? focusProducts.join(", ") : "",
-    "care instructions cleaning storage",
+    "care instructions cleaning storage filling",
   ]
     .filter(Boolean)
     .join(" — ");
@@ -97,6 +97,10 @@ export function buildCareFallbackReply(
   const about = focusProducts[0]
     ? `this ${focusProducts[0]}`
     : "this kind of product";
+
+  if (/\b(sand|fill|filling|stuff|heavier|weight)\b/i.test(message)) {
+    return `I couldn't find any official guidance covering that specifically, but generally we recommend using shredded textiles to fill punch bags. Adding loose sand directly is usually not advised as it can settle at the bottom, become extremely dense, and place undue stress on the seams or outer skin. If you wish to add weight, small sealed sandbags placed in the core surrounded by textile padding is the standard approach.`;
+  }
 
   if (/\b(wet|rain|outside|outdoor|moisture|waterproof)\b/i.test(message)) {
     return `That's a great question. We generally wouldn't recommend leaving ${about} outside in the rain. Even if the outer material can handle occasional moisture, prolonged exposure may damage the surface and allow moisture into any filling, reducing its lifespan. Unless the product specifically states it's designed for outdoor use, it's best to keep it indoors or covered when not in use.`;

@@ -26,9 +26,14 @@ import {
   isCareQuestion,
   runCareSupport,
 } from "@/lib/chat/support/care";
+import { tryResolveRdxUrlTurn } from "@/lib/chat/url";
 import type { JourneyMatch } from "@/lib/chat/intent/journeys";
-import { isCatalogCountQuery } from "@/lib/chat/intent/message";
-import { isProductFollowUpQuery } from "@/lib/chat/intent/message";
+import {
+  isCatalogCountQuery,
+  isExplicitCatalogListQuery,
+  isProductFollowUpQuery,
+  shouldForceProductSearch,
+} from "@/lib/chat/intent/message";
 
 export type OrchestratorDecision =
   | {
@@ -76,6 +81,32 @@ export async function resolveDeterministicTurn(
 ): Promise<OrchestratorDecision> {
   const { lastUser, journey, signal } = input;
 
+  // --- RDX storefront URL deep-links (never a free-text product search) ---
+  const urlDecision = await tryResolveRdxUrlTurn({
+    message: lastUser,
+    signal,
+  });
+  if (urlDecision) {
+    if (urlDecision.kind === "final_reply") {
+      return {
+        kind: "final_reply",
+        reply: urlDecision.reply,
+        intent: urlDecision.intent,
+        shownProducts: urlDecision.shownProducts,
+      };
+    }
+    return {
+      kind: "llm_wrap",
+      systemBlocks: urlDecision.systemBlocks,
+      intent: urlDecision.intent,
+      shownProducts: urlDecision.shownProducts,
+      searchQuery: urlDecision.searchQuery,
+      skipCatalogSearch: true,
+      fallbackReply: urlDecision.fallbackReply,
+      catalogContext: input.catalogContext,
+    };
+  }
+
   // --- Care / support (never a product search) ---
   if (isCareQuestion(lastUser)) {
     const care = await runCareSupport({
@@ -85,10 +116,7 @@ export async function resolveDeterministicTurn(
       catalogRepo: createCatalogRepository(),
       signal,
     });
-    const fallback = buildCareFallbackReply(
-      lastUser,
-      care.focusProducts,
-    );
+    const fallback = buildCareFallbackReply(lastUser, care.focusProducts);
     return {
       kind: "llm_wrap",
       systemBlocks: [care.guidancePrompt],
@@ -108,12 +136,19 @@ export async function resolveDeterministicTurn(
     Boolean(journey?.experience) ||
     /\b(recommend|best\s+for|which\s+is\s+best|suggest)\b/i.test(lastUser);
 
+  const isExplicitList = isExplicitCatalogListQuery(lastUser);
+  const forceProductSearch = shouldForceProductSearch(lastUser);
   const shouldRunSearch =
+    forceProductSearch ||
     !isFollowUp ||
     wantsCount ||
     wantsRecommend ||
     Boolean(journey && journey.searchQuery) ||
-    /\b(show|find|list|browse|looking\s+for|need|want)\b/i.test(lastUser);
+    isExplicitList ||
+    (!isFollowUp &&
+      /\b(show|find|list|browse|looking\s+for|need|want|buy|purchase|interested)\b/i.test(
+        lastUser,
+      ));
 
   if (!shouldRunSearch && isFollowUp && input.lastShownProducts?.length) {
     return { kind: "continue", intent: "product_information" };
@@ -136,7 +171,8 @@ export async function resolveDeterministicTurn(
     !shouldRunSearch &&
     !merch &&
     !wantsCount &&
-    !/\b(show|find|list|browse|how\s+many|gloves?|mats?|bags?|guards?|products?)\b/i.test(
+    !forceProductSearch &&
+    !/\b(show|find|list|browse|how\s+many|gloves?|mats?|bags?|guards?|balls?|products?|buy|purchase)\b/i.test(
       lastUser,
     )
   ) {
@@ -150,20 +186,19 @@ export async function resolveDeterministicTurn(
     catalogContext: input.catalogContext,
     filters: {
       budgetMax: merch?.budgetMax ?? input.catalogContext?.filters.budgetMax,
-      onSaleOnly:
-        merch?.onSaleOnly ?? input.catalogContext?.filters.onSaleOnly,
+      onSaleOnly: merch?.onSaleOnly ?? input.catalogContext?.filters.onSaleOnly,
     },
     forCount: wantsCount,
-    forceSearch: Boolean(merch) || wantsCount,
+    // Purchase / named-product intent must search immediately — never clarify-first.
+    forceSearch: Boolean(merch) || wantsCount || forceProductSearch,
     signal,
   });
 
   // Dynamic clarification from live collections.
   if (result.needsClarification) {
-    const options =
-      result.followUpOptions?.length
-        ? result.followUpOptions
-        : result.categoryMatch.children.map((c) => c.title);
+    const options = result.followUpOptions?.length
+      ? result.followUpOptions
+      : result.categoryMatch.children.map((c) => c.title);
     const topic =
       result.categoryMatch.primary?.title || lastUser.trim() || "that range";
     return {
@@ -229,7 +264,15 @@ export async function resolveDeterministicTurn(
   if (products.length === 0 && result.totalCount === 0) {
     return {
       kind: "final_reply",
-      reply: `I couldn't find matching products for that right now.\n\n### Next step\n\nCould you share a product type, model name, or use-case so I can narrow it down?`,
+      reply: `I couldn't find any products matching product for the query "${lastUser.trim()}" in our catalog.
+  
+  You can try:
+  • A product name (e.g. F6, T15, Kara)
+  • A category (Boxing Gloves, MMA Gloves, Head Guards)
+  • A feature (16oz, leather, red, beginner)
+  • A use case (sparring, training, competition)
+  
+  I'll help you find the closest match.`,
       intent: "product_information",
       catalogContext: ctx,
       shownProducts: null,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractOrderLookupToken,
   hasExplicitCatalogListOrCountIntent,
+  hasNamedProductModel,
   hasRecentProductContext,
   isAmbiguousBrowseQuery,
   isBareOrderNumberToken,
@@ -13,6 +14,7 @@ import {
   isOffTopicQuery,
   isOrderTrackingIntent,
   isProductFollowUpQuery,
+  isPurchaseOrProductInterest,
   needsProductClarification,
   resolveCatalogResponseMode,
   shouldForceProductSearch,
@@ -47,6 +49,14 @@ describe("isDiscountCodeQuery", () => {
   it("does not flag general sale questions", () => {
     expect(isDiscountCodeQuery("what is on sale")).toBe(false);
     expect(isDiscountCodeQuery("any discounted boxing gloves")).toBe(false);
+  });
+});
+
+describe("shouldForceProductSearch & thanks journeys", () => {
+  it("does not force product search on social thanks pleasantries", () => {
+    expect(shouldForceProductSearch("great thank you!")).toBe(false);
+    expect(shouldForceProductSearch("awesome thanks")).toBe(false);
+    expect(shouldForceProductSearch("perfect, thank you")).toBe(false);
   });
 });
 
@@ -140,6 +150,26 @@ describe("isCategoryBrowseQuery / resolveCatalogResponseMode", () => {
   });
 });
 
+describe("purchase / named-product interest", () => {
+  it("detects natural buy language and brand + model products", () => {
+    expect(
+      isPurchaseOrProductInterest(
+        "So I want to buy the RDX 2W SPEED PUNCHING BALL",
+      ),
+    ).toBe(true);
+    expect(hasNamedProductModel("RDX 2W SPEED PUNCHING BALL")).toBe(true);
+    expect(hasNamedProductModel("F6 gloves")).toBe(true);
+    expect(hasNamedProductModel("14oz gloves")).toBe(false);
+    expect(hasNamedProductModel("order 1001")).toBe(false);
+  });
+
+  it("does not treat trivia as purchase interest", () => {
+    expect(isPurchaseOrProductInterest("what is the capital of germany")).toBe(
+      false,
+    );
+  });
+});
+
 describe("needsProductClarification", () => {
   it("flags ultra-broad shopping asks", () => {
     expect(needsProductClarification("boxing")).toBe(true);
@@ -161,6 +191,20 @@ describe("needsProductClarification", () => {
 });
 
 describe("shouldForceProductSearch", () => {
+  it("forces search for natural purchase intent with a named product", () => {
+    expect(
+      shouldForceProductSearch(
+        "So I want to buy the RDX 2W SPEED PUNCHING BALL",
+      ),
+    ).toBe(true);
+    expect(
+      shouldForceProductSearch("I'd like to purchase the F6 gloves"),
+    ).toBe(true);
+    expect(
+      shouldForceProductSearch("interested in the RDX speed punching ball"),
+    ).toBe(true);
+  });
+
   it("forces search for product-like messages", () => {
     expect(shouldForceProductSearch("do you sell shin guards")).toBe(true);
     expect(shouldForceProductSearch("looking for kids punch bag")).toBe(true);
@@ -272,6 +316,10 @@ describe("isProductFollowUpQuery", () => {
     expect(isProductFollowUpQuery("which of them is on sale")).toBe(true);
     expect(isProductFollowUpQuery("compare these")).toBe(true);
     expect(isProductFollowUpQuery("compare the two")).toBe(true);
+    expect(isProductFollowUpQuery("i need to know about weight of these both")).toBe(true);
+    expect(isProductFollowUpQuery("tell me about the pre filled weight of this")).toBe(true);
+    expect(isProductFollowUpQuery("what is the pre-filled capacity of these")).toBe(true);
+    expect(isProductFollowUpQuery("tell me the specs of both")).toBe(true);
   });
 
   it("does not treat named-model comparisons as follow-ups", () => {

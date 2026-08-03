@@ -228,7 +228,7 @@ async function runMcpSearchOnce(input: {
     {
       query,
       pagination: { limit },
-      filters: { available: availableOnly },
+      // filters: { available: availableOnly },
     },
     { signal },
   );

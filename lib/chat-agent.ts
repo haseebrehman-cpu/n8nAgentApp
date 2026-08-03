@@ -48,6 +48,7 @@ import {
   THANKS_REPLY,
 } from "@/lib/chat/messaging/journey-replies";
 import { resolveDeterministicTurn } from "@/lib/chat/agent/orchestrator";
+import { messageContainsUrl } from "@/lib/chat/url";
 import {
   extractEmailFromText,
   extractOrderLookupToken,
@@ -421,7 +422,10 @@ export async function runChatAgent(
   }
 
   // Only short-circuit clear off-topic when there is no product thread to continue.
+  // Skip when the message includes a URL — RDX deep-links are handled next in
+  // resolveDeterministicTurn (and non-RDX links get a dedicated reply there).
   if (
+    !messageContainsUrl(lastUser) &&
     isOffTopicQuery(lastUser) &&
     !isProductFollowUpQuery(lastUser) &&
     !hasRecentProductContext(history)

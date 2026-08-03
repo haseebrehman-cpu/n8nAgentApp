@@ -49,7 +49,7 @@ export function isGreeting(text: string): boolean {
 
 export function isThanks(text: string): boolean {
   const t = text.trim().toLowerCase();
-  return /^(thanks|thank\s+you|thx|ty|cheers|appreciate\s+it)([!.,\s]|a\s+lot|so\s+much)*$/i.test(
+  return /^(great|awesome|perfect|cool|ok|okay|many)?\s*(thanks|thank\s+you|thx|ty|cheers|appreciate\s+it)([!.,\s]|a\s+lot|so\s+much)*$/i.test(
     t,
   );
 }
